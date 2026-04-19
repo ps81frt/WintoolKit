@@ -9,6 +9,7 @@ iwr https://raw.githubusercontent.com/ps81frt/WintoolKit/main/Wintoolkit.ps1 -Ou
 Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 Unblock-File -Path "$env:USERPROFILE\Downloads\Wintoolkit.ps1"
 Add-MpPreference -ExclusionPath "$env:USERPROFILE\Downloads\Wintoolkit.ps1"
+cd "$env:USERPROFILE\Downloads"
 .\Wintoolkit.ps1
 ```
 
