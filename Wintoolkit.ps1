@@ -467,20 +467,7 @@ function Invoke-DiagBoot {
             Write-INFO  "  3. Disque de boot non visible depuis cette session (StorageSpace, RAID)"
         }
     } else {
-        # Construire map HarddiskVolumeX -> DiskNumber
-        # Chaine : Win32_Volume.DeviceID = \\?\Volume{GUID}\
-        #          Get-Partition.Guid     = {GUID}
-        #          -> croisement GUID -> DiskNumber
-        # bcdedit retourne : device = partition=\Device\HarddiskVolumeX
-        # Win32_Volume.DeviceID retourne aussi \\?\Volume{GUID}\ mais pas HarddiskVolumeX directement
-        # On utilise la propriete Name ou Caption de Win32_LogicalDisk OU
-        # on passe par Get-Volume -> FileSystemLabel/UniqueId -> Get-Partition
-        # Methode la plus robuste : Get-Partition possede AccessPaths qui contient \\?\Volume{GUID}\
-        # On mappe AccessPath{GUID} -> DiskNumber, puis on resout HarddiskVolumeX via Win32_Volume
-
-        # Map HarddiskVolumeX -> DiskNumber
-        # Chaine : Get-Partition.AccessPaths -> Volume{GUID} -> QueryDosDevice -> HarddiskVolumeX
-        # Add-Type NativeHelper en dehors du try interne pour eviter conflit si deja declare
+        
         $hdVolToDisk = @{}
         $volGuidToDisk = @{}
         foreach ($p in $allParts) {
@@ -6969,7 +6956,6 @@ function Invoke-ComparePC {
 
 # ===========================================================================
 #  MODULE 9 — EVCDiag : Crashes / Kernel / IO / Drivers
-#  Intégré depuis EVCDiag.ps1 (ps81frt — MIT)
 # ===========================================================================
 function Invoke-EVCDiag {
     Assert-AdminPrivilege
