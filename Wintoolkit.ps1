@@ -4,7 +4,7 @@
     WinToolkit v2 - Suite Diagnostic & Securite Windows
 
 .DESCRIPTION
-    Menu principal 8 modules.  TOUS les rapports sur le Bureau.
+    Menu principal 11 modules.  TOUS les rapports sur le Bureau.
       1. InfoSys    -> Bureau\InfoSys_<ts>.zip
       2. DiagBoot   -> Bureau\DiagBoot_<ts>.txt
       3. AuditSOC   -> Bureau\AuditSOC_<ts>.txt
@@ -13,9 +13,12 @@
       6. SFC/DISM   -> Bureau\CBS_SFC_DISM_Report_<ts>.txt/.html
       7. NetShare   -> Bureau\NetShare_<ts>.html
       8. Compare-PC -> Bureau\CPR_<ts>\
+      9. EVCDiag    -> Bureau\EVC_Export\
+     10. CrashDiag  -> Bureau\CrashDiag_<ts>\*.txt + *.html
+     11. GhostWin   -> Bureau\GhostWin_<ts>\*.csv/.html
 
 .PARAMETER Module
-    InfoSys | DiagBoot | AuditSOC | EDR | WinDiag | SFC | NetShare | ComparePC
+    InfoSys | DiagBoot | AuditSOC | EDR | WinDiag | SFC | NetShare | ComparePC | EVCDiag | CrashDiag | GhostWin
 
 .PARAMETER Fix
     (EDR) All | Firewall | SmartScreen | Defender | SMBv1 | LSA
@@ -44,10 +47,10 @@
     .\WinToolkit.ps1 -Module WinDiag -Query 0xc000012f
     .\WinToolkit.ps1 -Module NetShare -NetMode PUBLIC
 
-.AUTHOR ps81frt / https://github.com/ps81frt/
+.AUTHOR ps81frt / https://github.com/ps81frt/wintoolkit
 #>
 param(
-    [ValidateSet("InfoSys","DiagBoot","AuditSOC","EDR","WinDiag","SFC","NetShare","ComparePC","EVCDiag","CrashDiag","")]
+    [ValidateSet("InfoSys","DiagBoot","AuditSOC","EDR","WinDiag","SFC","NetShare","ComparePC","EVCDiag","CrashDiag","GhostWin","")]
     [string]$Module = "",
     [ValidateSet("All","Firewall","SmartScreen","Defender","SMBv1","LSA","None")]
     [string]$Fix = "None",
@@ -8266,6 +8269,434 @@ document.querySelectorAll('#sidebar nav a').forEach(a=>a.addEventListener('click
     Write-INFO "Ouvrez le HTML dans votre navigateur pour le rapport interactif."
 }
 
+# ===========================================================================
+#  MODULE 11 — GhostWin : Detection fenetres fantomes / zones mortes ecran
+#  Diagnostique les fenetres invisibles qui interceptent le curseur
+# ===========================================================================
+function Invoke-GhostWin {
+    Assert-AdminPrivilege
+    Write-Title "MODULE 11 — GhostWin : Detection fenetres fantomes"
+
+    # Chargement API Win32
+    if (-not ([System.Management.Automation.PSTypeName]'GW_Win32').Type) {
+        Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+using System.Text;
+public class GW_Win32 {
+    [DllImport("user32.dll")] public static extern bool EnumWindows(EnumWindowsProc f, IntPtr l);
+    [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
+    [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out RECT r);
+    [DllImport("user32.dll")] public static extern int  GetWindowText(IntPtr h, System.Text.StringBuilder s, int m);
+    [DllImport("user32.dll")] public static extern int  GetClassName(IntPtr h, System.Text.StringBuilder s, int m);
+    [DllImport("user32.dll")] public static extern int  GetWindowThreadProcessId(IntPtr h, out int p);
+    [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr h);
+    [DllImport("user32.dll")] public static extern int  GetWindowLong(IntPtr h, int idx);
+    [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr h, uint msg, IntPtr w, IntPtr l);
+    public delegate bool EnumWindowsProc(IntPtr h, IntPtr l);
+    public struct RECT { public int L, T, R, B; }
+    public const int GWL_EXSTYLE       = -20;
+    public const int WS_EX_TRANSPARENT = 0x00000020;
+    public const int WS_EX_LAYERED     = 0x00080000;
+    public const int WS_EX_TOOLWINDOW  = 0x00000080;
+    public const uint WM_CLOSE         = 0x0010;
+}
+"@
+    }
+
+    $classesSuspectes = @(
+        'Shell_TrayWnd','Shell_SecondaryTrayWnd',
+        'Windows.UI.Core.CoreWindow','TopLevelWindowForOverflowXamlIsland',
+        'XamlExplorerHostIslandWindow','TaskListThumbnailWnd',
+        'NativeHWNDHost','ApplicationFrameWindow',
+        'Windows.UI.Composition.DesktopWindowContentBridge'
+    )
+
+    function Get-AllGhostWindows {
+        param([switch]$IncludeInvisible)
+        Add-Type -AssemblyName System.Windows.Forms -ErrorAction SilentlyContinue
+        $screenW = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds.Width
+        $screenH = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds.Height
+        $clsSusp = $script:classesSuspectes
+        $list    = [System.Collections.Generic.List[object]]::new()
+
+        # Collecte des HWND via EnumWindows dans un scriptblock standard (pas de $using:)
+        $hwndList = [System.Collections.Generic.List[IntPtr]]::new()
+        $cb = [GW_Win32+EnumWindowsProc]{ param($h,$l); $hwndList.Add($h); return $true }
+        [GW_Win32]::EnumWindows($cb, [IntPtr]::Zero) | Out-Null
+
+        foreach ($hwnd in $hwndList) {
+            $visible = [GW_Win32]::IsWindowVisible($hwnd)
+            if (-not $visible -and -not $IncludeInvisible) { continue }
+
+            $rect = New-Object GW_Win32+RECT
+            [GW_Win32]::GetWindowRect($hwnd, [ref]$rect) | Out-Null
+            $w = $rect.R - $rect.L; $h = $rect.B - $rect.T
+            if ($w -le 0 -or $h -le 0) { continue }
+
+            $sbT = New-Object System.Text.StringBuilder 256
+            $sbC = New-Object System.Text.StringBuilder 256
+            [GW_Win32]::GetWindowText($hwnd, $sbT, 256) | Out-Null
+            [GW_Win32]::GetClassName($hwnd,  $sbC, 256) | Out-Null
+
+            $pid2 = 0
+            [GW_Win32]::GetWindowThreadProcessId($hwnd, [ref]$pid2) | Out-Null
+            $proc = (Get-Process -Id $pid2 -ErrorAction SilentlyContinue).Name
+
+            $exStyle     = [GW_Win32]::GetWindowLong($hwnd, [GW_Win32]::GWL_EXSTYLE)
+            $layered     = ($exStyle -band [GW_Win32]::WS_EX_LAYERED)     -ne 0
+            $transparent = ($exStyle -band [GW_Win32]::WS_EX_TRANSPARENT) -ne 0
+            $toolwin     = ($exStyle -band [GW_Win32]::WS_EX_TOOLWINDOW)  -ne 0
+            $minimise    = [GW_Win32]::IsIconic($hwnd)
+
+            $score  = 0
+            $raisons = [System.Collections.Generic.List[string]]::new()
+            if ($layered -and $transparent) { $score += 3; $raisons.Add("Layered+Transparent") }
+            elseif ($layered)               { $score += 1; $raisons.Add("Layered") }
+            if ($sbT.ToString() -eq "")     { $score += 1; $raisons.Add("SansTitre") }
+            if ($visible -and $minimise)    { $score += 2; $raisons.Add("Visible+Minimisee") }
+            if ($rect.T -lt 0 -or $rect.L -lt 0) { $score += 1; $raisons.Add("HorsEcran") }
+
+            $cls = $sbC.ToString()
+            foreach ($cs in $clsSusp) {
+                if ($cls -eq $cs) { $score += 2; $raisons.Add("ClasseSuspecte:$cs"); break }
+            }
+
+            $zoneMorte = $false
+            if ($visible -and -not $minimise -and
+                $rect.B -gt ($screenH - 200) -and $rect.T -lt $screenH -and
+                $rect.L -ge -50 -and $rect.R -le ($screenW + 50)) {
+                $score += 2; $raisons.Add("ZoneBasEcran"); $zoneMorte = $true
+            }
+
+            $list.Add([PSCustomObject]@{
+                HWND        = "0x{0:X}" -f $hwnd.ToInt64()
+                HWNDInt     = $hwnd.ToInt64()
+                Titre       = $sbT.ToString()
+                Classe      = $cls
+                Process     = $proc
+                PID         = $pid2
+                Visible     = $visible
+                Layered     = $layered
+                Transparent = $transparent
+                ToolWin     = $toolwin
+                Minimise    = $minimise
+                Left        = $rect.L
+                Top         = $rect.T
+                Right       = $rect.R
+                Bottom      = $rect.B
+                Largeur     = $w
+                Hauteur     = $h
+                Score       = $score
+                Raisons     = ($raisons -join ' | ')
+                ZoneMorte   = $zoneMorte
+            })
+        }
+        return $list
+    }
+
+    while ($true) {
+        Write-Host ""
+        Write-Host "  ╔══════════════════════════════════════════════════════════════╗" -ForegroundColor DarkCyan
+        Write-Host "  ║     MODULE 11 — GhostWin  (Fenetres fantomes / zones)       ║" -ForegroundColor DarkCyan
+        Write-Host "  ╠══════════════════════════════════════════════════════════════╣" -ForegroundColor DarkCyan
+        Write-Host "  ║  S.  Scan       — Toutes les fenetres + score de suspicion  ║" -ForegroundColor White
+        Write-Host "  ║  Z.  ZoneMorte  — Fenetres suspectes bas d ecran seulement  ║" -ForegroundColor Yellow
+        Write-Host "  ║  E.  Export     — CSV + rapport HTML sur le Bureau          ║" -ForegroundColor White
+        Write-Host "  ║  R.  Reset DWM  — Equivalent Win+Ctrl+Shift+B              ║" -ForegroundColor Magenta
+        Write-Host "  ║  K.  Kill       — Fermer une fenetre par son HWND           ║" -ForegroundColor Red
+        Write-Host "  ║  0.  Retour menu principal                                  ║" -ForegroundColor DarkGray
+        Write-Host "  ╚══════════════════════════════════════════════════════════════╝" -ForegroundColor DarkCyan
+        Write-Host ""
+        $gwChoice = (Read-Host "  Votre choix").ToUpper().Trim()
+
+        switch ($gwChoice) {
+
+            "S" {
+                Write-Title "GhostWin — SCAN COMPLET"
+                Write-INFO "Enumeration des fenetres..."
+                $wins = Get-AllGhostWindows
+                Write-Host ""
+                Write-Host ("  {0,-12} {1,-20} {2,-30} {3,-16} {4,5}  {5}" -f "HWND","Process","Classe","Titre","Score","Raisons") -ForegroundColor DarkCyan
+                Write-Host ("  " + "-"*110) -ForegroundColor DarkGray
+                foreach ($ww in ($wins | Sort-Object Score -Descending)) {
+                    $t = if ($ww.Titre.Length -gt 15)  { $ww.Titre.Substring(0,15)  + "~" } else { $ww.Titre }
+                    $c = if ($ww.Classe.Length -gt 29) { $ww.Classe.Substring(0,29) + "~" } else { $ww.Classe }
+                    $p = if ($ww.Process -and $ww.Process.Length -gt 19) { $ww.Process.Substring(0,19)+"~" } else { $ww.Process }
+                    $col = if ($ww.Score -ge 5) { "Red" } elseif ($ww.Score -ge 3) { "Yellow" } else { "Gray" }
+                    Write-Host ("  {0,-12} {1,-20} {2,-30} {3,-16} {4,5}  {5}" -f $ww.HWND,$p,$c,$t,$ww.Score,$ww.Raisons) -ForegroundColor $col
+                }
+                Write-Host ""; Write-INFO "$($wins.Count) fenetres  |  Rouge=Score>=5 (tres suspect)  |  Jaune=Score>=3"
+            }
+
+            "Z" {
+                Write-Title "GhostWin — ZONE MORTE BAS D ECRAN"
+                Write-INFO "Recherche fenetres suspectes..."
+                $wins = Get-AllGhostWindows
+                $suspects = $wins | Where-Object { $_.Score -ge 3 } | Sort-Object Score -Descending
+                if ($suspects.Count -eq 0) {
+                    Write-OK "Aucune fenetre suspecte dans la zone basse."
+                } else {
+                    Write-WARN "$($suspects.Count) fenetre(s) suspecte(s) :"
+                    Write-Host ""
+                    foreach ($ww in $suspects) {
+                        $col = if ($ww.Score -ge 5) { "Red" } else { "Yellow" }
+                        Write-Host ("  [{0}]  Score={1}  Process={2}  Classe={3}" -f $ww.HWND,$ww.Score,$ww.Process,$ww.Classe) -ForegroundColor $col
+                        Write-Host ("         Titre=`"{0}`"  Pos=({1},{2})->({3},{4})  Taille={5}x{6}" -f $ww.Titre,$ww.Left,$ww.Top,$ww.Right,$ww.Bottom,$ww.Largeur,$ww.Hauteur) -ForegroundColor DarkGray
+                        Write-Host ("         Raisons : {0}" -f $ww.Raisons) -ForegroundColor $col
+                        Write-Host ""
+                    }
+                    Write-WARN "Utilisez K pour fermer par HWND, ou R pour reset DWM."
+                }
+            }
+
+            "E" {
+                Write-Title "GhostWin — EXPORT CSV + HTML"
+                Write-INFO "Collecte (toutes fenetres, y compris invisibles)..."
+                $wins = Get-AllGhostWindows -IncludeInvisible
+                $ts2  = Get-Date -Format "yyyyMMdd_HHmmss"
+                $outDir2 = "$env:USERPROFILE\Desktop\GhostWin_$ts2"
+                $null = New-Item -ItemType Directory -Path $outDir2 -Force
+
+                # CSV
+                $csvPath = "$outDir2\GhostWin_$ts2.csv"
+                $wins | Sort-Object Score -Descending |
+                    Select-Object HWND,Titre,Classe,Process,PID,Visible,Layered,Transparent,
+                        ToolWin,Minimise,Left,Top,Right,Bottom,Largeur,Hauteur,Score,Raisons,ZoneMorte |
+                    Export-Csv $csvPath -NoTypeInformation -Encoding UTF8
+                Write-OK "CSV : $csvPath"
+
+                # HTML — tableau interactif tri + filtre
+                $htmlPath = "$outDir2\GhostWin_$ts2.html"
+                $rows = ($wins | Sort-Object Score -Descending | ForEach-Object {
+                    $scoreVal = $_.Score
+                    if ($scoreVal -ge 5) {
+                        $badge = "<span class='badge badge-crit'>&#9888; $scoreVal CRITIQUE</span>"
+                        $rowCls = "row-crit"
+                    } elseif ($scoreVal -ge 3) {
+                        $badge = "<span class='badge badge-warn'>&#9888; $scoreVal SUSPECT</span>"
+                        $rowCls = "row-warn"
+                    } else {
+                        $badge = "<span class='badge badge-ok'>$scoreVal OK</span>"
+                        $rowCls = "row-ok"
+                    }
+                    $zm = if ($_.ZoneMorte) { "<span class='badge badge-crit'>&#9632; ZONE</span>" } else { "" }
+                    $lay = if ($_.Layered -and $_.Transparent) { "<span class='badge badge-warn'>L+T</span>" } elseif ($_.Layered) { "<span class='badge badge-info'>L</span>" } else { "" }
+                    "<tr class='$rowCls' data-score='$scoreVal'>
+                      <td class='mono'>$($_.HWND)</td>
+                      <td><b>$($_.Process)</b></td>
+                      <td class='mono small'>$($_.Classe)</td>
+                      <td>$($_.Titre)</td>
+                      <td>$badge $zm</td>
+                      <td class='mono small'>$($_.Left),$($_.Top)<br>$($_.Right),$($_.Bottom)</td>
+                      <td class='mono'>$($_.Largeur)&times;$($_.Hauteur)</td>
+                      <td class='small'>$lay $($_.Raisons)</td>
+                    </tr>"
+                }) -join "`n"
+
+                $machine = $env:COMPUTERNAME
+                $dateNow = Get-Date -Format "dd/MM/yyyy HH:mm:ss"
+                $total   = $wins.Count
+                $nCrit   = ($wins | Where-Object { $_.Score -ge 5 }).Count
+                $nWarn   = ($wins | Where-Object { $_.Score -ge 3 -and $_.Score -lt 5 }).Count
+                $nOk     = ($wins | Where-Object { $_.Score -lt 3 }).Count
+
+                @"
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<title>GhostWin — $ts2</title>
+<style>
+  :root {
+    --bg:      #0f1117;
+    --bg2:     #1a1d27;
+    --bg3:     #22263a;
+    --border:  #2e3250;
+    --text:    #e2e8f0;
+    --muted:   #7c87a6;
+    --blue:    #60a5fa;
+    --crit-bg: #2d1515;
+    --crit-fg: #f87171;
+    --crit-bd: #7f1d1d;
+    --warn-bg: #1e1a0a;
+    --warn-fg: #fb923c;
+    --warn-bd: #78350f;
+    --ok-bg:   #0a1a12;
+    --ok-fg:   #4ade80;
+    --ok-bd:   #14532d;
+    --info-fg: #818cf8;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font-family: 'Segoe UI', system-ui, sans-serif; font-size: 13px; padding: 24px; }
+  h1 { font-size: 22px; font-weight: 700; color: var(--blue); margin-bottom: 4px; letter-spacing: -.3px; }
+  .meta { color: var(--muted); font-size: 12px; margin-bottom: 20px; }
+  .stats { display: flex; gap: 12px; margin-bottom: 20px; flex-wrap: wrap; }
+  .stat { background: var(--bg2); border: 1px solid var(--border); border-radius: 10px; padding: 12px 20px; min-width: 120px; }
+  .stat-val { font-size: 28px; font-weight: 700; line-height: 1; }
+  .stat-lbl { font-size: 11px; color: var(--muted); margin-top: 3px; text-transform: uppercase; letter-spacing: .5px; }
+  .stat-crit .stat-val { color: var(--crit-fg); }
+  .stat-warn .stat-val { color: var(--warn-fg); }
+  .stat-ok   .stat-val { color: var(--ok-fg); }
+  .stat-tot  .stat-val { color: var(--blue); }
+  .toolbar { display: flex; gap: 10px; margin-bottom: 16px; align-items: center; flex-wrap: wrap; }
+  .toolbar input { background: var(--bg2); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 8px 14px; font-size: 13px; width: 280px; outline: none; }
+  .toolbar input:focus { border-color: var(--blue); }
+  .toolbar select { background: var(--bg2); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px; font-size: 13px; outline: none; cursor: pointer; }
+  .toolbar label { color: var(--muted); font-size: 12px; }
+  .wrap { overflow-x: auto; border-radius: 10px; border: 1px solid var(--border); }
+  table { border-collapse: collapse; width: 100%; min-width: 900px; }
+  thead th { background: var(--bg3); color: var(--blue); padding: 10px 12px; text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: .6px; position: sticky; top: 0; cursor: pointer; user-select: none; white-space: nowrap; border-bottom: 1px solid var(--border); }
+  thead th:hover { background: #2a2f47; }
+  thead th.sorted-asc::after  { content: ' ▲'; font-size: 10px; }
+  thead th.sorted-desc::after { content: ' ▼'; font-size: 10px; }
+  tbody tr { border-bottom: 1px solid var(--border); transition: background .1s; }
+  tbody tr:hover td { filter: brightness(1.15); }
+  tbody tr:last-child { border-bottom: none; }
+  td { padding: 8px 12px; vertical-align: middle; }
+  .row-crit { background: var(--crit-bg); }
+  .row-warn { background: var(--warn-bg); }
+  .row-ok   { background: var(--bg); }
+  .badge { display: inline-block; border-radius: 5px; padding: 2px 7px; font-size: 10px; font-weight: 700; letter-spacing: .3px; white-space: nowrap; }
+  .badge-crit { background: var(--crit-bg); color: var(--crit-fg); border: 1px solid var(--crit-bd); }
+  .badge-warn { background: var(--warn-bg); color: var(--warn-fg); border: 1px solid var(--warn-bd); }
+  .badge-ok   { background: var(--ok-bg);   color: var(--ok-fg);   border: 1px solid var(--ok-bd);   }
+  .badge-info { background: #1e1b4b; color: var(--info-fg); border: 1px solid #312e81; }
+  .mono  { font-family: 'Cascadia Code', 'Consolas', monospace; }
+  .small { font-size: 11px; color: var(--muted); }
+  .hidden { display: none !important; }
+  .footer { margin-top: 20px; color: var(--muted); font-size: 11px; }
+</style>
+</head>
+<body>
+<h1>&#128123; GhostWin — Rapport fenetres fantomes</h1>
+<div class="meta">Machine : <b>$machine</b> &nbsp;&bull;&nbsp; $dateNow &nbsp;&bull;&nbsp; WinToolkit ps81frt</div>
+
+<div class="stats">
+  <div class="stat stat-tot"><div class="stat-val">$total</div><div class="stat-lbl">Total fenetres</div></div>
+  <div class="stat stat-crit"><div class="stat-val">$nCrit</div><div class="stat-lbl">&#9888; Critiques (≥5)</div></div>
+  <div class="stat stat-warn"><div class="stat-val">$nWarn</div><div class="stat-lbl">&#9888; Suspectes (≥3)</div></div>
+  <div class="stat stat-ok"><div class="stat-val">$nOk</div><div class="stat-lbl">&#10003; Normales</div></div>
+</div>
+
+<div class="toolbar">
+  <input type="text" id="search" placeholder="&#128269; Filtrer process, classe, HWND, raisons..." oninput="applyFilters()">
+  <label>Niveau min :
+    <select id="minScore" onchange="applyFilters()">
+      <option value="0">Tout afficher</option>
+      <option value="3">Suspect (≥3)</option>
+      <option value="5">Critique (≥5)</option>
+    </select>
+  </label>
+  <label><input type="checkbox" id="onlyZone" onchange="applyFilters()"> Zone morte seulement</label>
+</div>
+
+<div class="wrap">
+<table id="gwTable">
+  <thead>
+    <tr>
+      <th onclick="sortTable(0)">HWND</th>
+      <th onclick="sortTable(1)">Process</th>
+      <th onclick="sortTable(2)">Classe</th>
+      <th onclick="sortTable(3)">Titre</th>
+      <th onclick="sortTable(4)">Score</th>
+      <th onclick="sortTable(5)">Position</th>
+      <th onclick="sortTable(6)">Taille</th>
+      <th>Raisons</th>
+    </tr>
+  </thead>
+  <tbody>
+$rows
+  </tbody>
+</table>
+</div>
+<div class="footer" id="countLine"></div>
+
+<script>
+var sortCol = 4, sortDir = -1;
+
+function applyFilters() {
+  var q    = document.getElementById('search').value.toLowerCase();
+  var minS = parseInt(document.getElementById('minScore').value) || 0;
+  var onlyZ = document.getElementById('onlyZone').checked;
+  var rows = document.querySelectorAll('#gwTable tbody tr');
+  var vis = 0;
+  rows.forEach(function(r) {
+    var score = parseInt(r.dataset.score) || 0;
+    var text  = r.innerText.toLowerCase();
+    var zone  = r.querySelector('.badge-crit') && r.querySelector('.badge-crit').textContent.includes('ZONE');
+    var show  = score >= minS && text.includes(q) && (!onlyZ || zone);
+    r.classList.toggle('hidden', !show);
+    if (show) vis++;
+  });
+  document.getElementById('countLine').textContent = vis + ' fenetre(s) affichee(s)';
+}
+
+function sortTable(col) {
+  var tbody = document.querySelector('#gwTable tbody');
+  var rows  = Array.from(tbody.querySelectorAll('tr'));
+  if (sortCol === col) { sortDir *= -1; } else { sortCol = col; sortDir = col === 4 ? -1 : 1; }
+  rows.sort(function(a, b) {
+    var ta = a.cells[col] ? a.cells[col].innerText.trim() : '';
+    var tb = b.cells[col] ? b.cells[col].innerText.trim() : '';
+    var na = parseFloat(ta); var nb = parseFloat(tb);
+    if (!isNaN(na) && !isNaN(nb)) return (na - nb) * sortDir;
+    return ta.localeCompare(tb) * sortDir;
+  });
+  rows.forEach(function(r) { tbody.appendChild(r); });
+  document.querySelectorAll('thead th').forEach(function(th, i) {
+    th.classList.remove('sorted-asc','sorted-desc');
+    if (i === sortCol) th.classList.add(sortDir === 1 ? 'sorted-asc' : 'sorted-desc');
+  });
+}
+
+window.onload = function() { applyFilters(); sortTable(4); };
+</script>
+</body>
+</html>
+"@ | Out-File $htmlPath -Encoding UTF8
+                Write-OK "HTML : $htmlPath"
+                Write-OK "Dossier : $outDir2"
+                Start-Process $htmlPath
+            }
+
+            "R" {
+                Write-Title "GhostWin — RESET DWM"
+                Write-WARN "L ecran va clignoter ~1 seconde. Aucun programme ne se fermera."
+                $confirm = (Read-Host "  Confirmer ? [O/n]").ToUpper().Trim()
+                if ($confirm -ne "N") {
+                    Add-Type -AssemblyName System.Windows.Forms -ErrorAction SilentlyContinue
+                    [System.Windows.Forms.SendKeys]::SendWait("%^+{B}")
+                    Start-Sleep -Milliseconds 1500
+                    Write-OK "Reset DWM envoye."
+                    Write-INFO "Zone morte disparue -> bug pilote/DWM confirme -> MAJ pilote NVIDIA recommandee."
+                    Write-INFO "Zone morte toujours la -> processus tiers -> utilisez Z puis K."
+                }
+            }
+
+            "K" {
+                Write-Title "GhostWin — KILL FENETRE"
+                Write-WARN "Attention : fermer une fenetre systeme peut destabiliser Windows."
+                $hwndStr = (Read-Host "  HWND a fermer (ex: 0x1A2B3C, ENTREE pour annuler)").Trim()
+                if ([string]::IsNullOrWhiteSpace($hwndStr)) { break }
+                $hwndHex = $hwndStr -replace '^0[xX]', ''
+                try {
+                    $hwndVal = [Convert]::ToInt64($hwndHex, 16)
+                    $hwndPtr = [IntPtr]$hwndVal
+                    [GW_Win32]::PostMessage($hwndPtr, [GW_Win32]::WM_CLOSE, [IntPtr]::Zero, [IntPtr]::Zero) | Out-Null
+                    Write-OK "WM_CLOSE envoye a $hwndStr — Relancez Z pour verifier."
+                } catch { Write-ERR "HWND invalide : $_" }
+            }
+
+            "0" { return }
+            default { Write-WARN "Choix invalide." }
+        }
+        Write-Host ""; Write-Host "  Appuyez sur ENTREE pour revenir au menu GhostWin..." -ForegroundColor DarkGray
+        $null = Read-Host
+    }
+}
+
+
 function Show-MainMenu {
     while ($true) {
         Show-Banner
@@ -8284,6 +8715,7 @@ function Show-MainMenu {
         Write-Host "  ║  8.  Compare-PC — Analyse differentielle multi-machines      ║" -ForegroundColor White
         Write-Host "  ║  9.  EVCDiag    — Crashes, kernel, IO latences, drivers      ║" -ForegroundColor White
         Write-Host "  ║  10. CrashDiag  — BSOD, freezes, WHEA, sessions, app crash   ║" -ForegroundColor White
+        Write-Host "  ║  11. GhostWin   — Fenetres fantomes / zones mortes ecran     ║" -ForegroundColor Cyan
         Write-Host "  ╠══════════════════════════════════════════════════════════════╣" -ForegroundColor DarkCyan
         Write-Host "  ║  H.  Aide       — Detail de chaque module                    ║" -ForegroundColor DarkGray
         Write-Host "  ║  0.  Quitter                                                 ║" -ForegroundColor DarkGray
@@ -8500,9 +8932,11 @@ function Show-MainMenu {
                 }
             }
 
+            "11" { Invoke-GhostWin }
+
             "0" { Write-Host ""; Write-Host "  Au revoir !" -ForegroundColor Cyan; Write-Host ""; exit }
 
-            default { Write-Host "  Choix invalide. Tapez un numero de 1 a 9, H pour l'aide, ou 0 pour quitter." -ForegroundColor Red }
+            default { Write-Host "  Choix invalide. Tapez un numero de 1 a 11, H pour l'aide, ou 0 pour quitter." -ForegroundColor Red }
         }
         Write-Host ""
         Write-Host "  Appuyez sur ENTREE pour revenir au menu..." -ForegroundColor DarkGray
@@ -8531,5 +8965,6 @@ switch ($Module) {
     "ComparePC" { Invoke-ComparePC -InputFiles $ReportFiles }
     "EVCDiag"   { Invoke-EVCDiag }
     "CrashDiag" { Invoke-CrashDiag -HeuresHistorique $HeuresHistorique -HTML:$ExportHTML -ExportCSV:$ExportCSV }
+    "GhostWin"  { Invoke-GhostWin }
     default     { Show-MainMenu }
 }
