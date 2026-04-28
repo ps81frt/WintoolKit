@@ -1,9 +1,9 @@
-## 💡 Tip
 
-You can include the app folder in your antivirus' exclusion list to prevent issues due to antivirus detections.
 
-For Defender, you can run the following script in PowerShell as an administrator:
+#  INSTALLATION
 
+- Copier coller dans un terminal la commande ci-dessous
+ 
 ```powershell
 iwr https://raw.githubusercontent.com/ps81frt/WintoolKit/main/Wintoolkit.ps1 -OutFile "$env:USERPROFILE\Downloads\Wintoolkit.ps1"
 Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
@@ -12,6 +12,12 @@ Add-MpPreference -ExclusionPath "$env:USERPROFILE\Downloads\Wintoolkit.ps1"
 cd "$env:USERPROFILE\Downloads"
 .\Wintoolkit.ps1
 ```
+
+## 💡 Tip
+
+You can include the app folder in your antivirus' exclusion list to prevent issues due to antivirus detections.
+
+For Defender, you can run the following script in PowerShell as an administrator:
 
 ## ⚠️ Warning
 
