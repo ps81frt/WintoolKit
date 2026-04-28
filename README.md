@@ -2,7 +2,7 @@
 
 #  INSTALLATION
 
-- Copier coller dans un terminal la commande ci-dessous
+- Copier coller dans un terminal ADMINISTRATEUR la commande ci-dessous
  
 ```powershell
 iwr https://raw.githubusercontent.com/ps81frt/WintoolKit/main/Wintoolkit.ps1 -OutFile "$env:USERPROFILE\Downloads\Wintoolkit.ps1"
