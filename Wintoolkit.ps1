@@ -8452,6 +8452,7 @@ public class GW_Win32 {
                 }
                 Write-Host ""; Write-INFO "$($wins.Count) fenetres  |  Rouge=Score>=5 (tres suspect)  |  Jaune=Score>=3"
                 $skipPause = $true
+                return
             }
 
             "Z" {
@@ -8741,6 +8742,7 @@ window.onload = function() { applyFilters(); sortTable(6); attachRowHandlers(); 
                 Write-OK "HTML : $htmlPath"
                 Write-OK "Dossier : $outDir2"
                 Start-Process $htmlPath
+                return
             }
 
             "R" {
