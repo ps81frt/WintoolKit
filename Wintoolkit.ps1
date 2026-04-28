@@ -8431,6 +8431,7 @@ public class GW_Win32 {
         Write-Host "  ╚══════════════════════════════════════════════════════════════╝" -ForegroundColor DarkCyan
         Write-Host ""
         $gwChoice = (Read-Host "  Votre choix").ToUpper().Trim()
+        $skipPause = $false
 
         switch ($gwChoice) {
 
@@ -8450,6 +8451,7 @@ public class GW_Win32 {
                     Write-Host ("  {0,-12} {1,-20} {2,-35} {3,-28} {4,-16} {5,5}  {6}" -f $ww.HWND,$p,$path,$c,$t,$ww.Score,$ww.Raisons) -ForegroundColor $col
                 }
                 Write-Host ""; Write-INFO "$($wins.Count) fenetres  |  Rouge=Score>=5 (tres suspect)  |  Jaune=Score>=3"
+                $skipPause = $true
             }
 
             "Z" {
@@ -8488,6 +8490,7 @@ public class GW_Win32 {
                         ToolWin,Minimise,Left,Top,Right,Bottom,Largeur,Hauteur,Score,Raisons,ZoneMorte |
                     Export-Csv $csvPath -NoTypeInformation -Encoding UTF8
                 Write-OK "CSV : $csvPath"
+                $skipPause = $true
 
                 # HTML — tableau interactif tri + filtre
                 $htmlPath = "$outDir2\GhostWin_$ts2.html"
@@ -8771,8 +8774,10 @@ window.onload = function() { applyFilters(); sortTable(6); attachRowHandlers(); 
             "0" { return }
             default { Write-WARN "Choix invalide." }
         }
+        if (-not $skipPause) {
         Write-Host ""; Write-Host "  Appuyez sur ENTREE pour revenir au menu GhostWin..." -ForegroundColor DarkGray
         $null = Read-Host
+        }
     }
 }
 
