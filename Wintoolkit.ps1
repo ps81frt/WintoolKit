@@ -8432,8 +8432,16 @@ public class GW_Win32 {
         Write-Host ""
         Write-Host "  Astuce : vous pouvez saisir SZ, SZE, SE, etc. pour enchainer plusieurs actions." -ForegroundColor DarkGray
         $gwChoice = (Read-Host "  Votre choix").ToUpper().Trim()
+        $skipPause = $false
 
-        switch ($gwChoice) {
+        if ($gwChoice -match '^[SZE]+$' -and $gwChoice.Length -gt 1) {
+            $gwActions = $gwChoice.ToCharArray()
+        } else {
+            $gwActions = @($gwChoice)
+        }
+
+        foreach ($gwChoice in $gwActions) {
+            switch ($gwChoice) {
 
             "S" {
                 Write-Title "GhostWin — SCAN COMPLET"
@@ -8774,8 +8782,11 @@ window.onload = function() { applyFilters(); sortTable(6); attachRowHandlers(); 
             "0" { return }
             default { Write-WARN "Choix invalide." }
         }
-        Write-Host ""; Write-Host "  Appuyez sur ENTREE pour revenir au menu GhostWin..." -ForegroundColor DarkGray
-        $null = Read-Host
+        }
+        if (-not $skipPause) {
+            Write-Host ""; Write-Host "  Appuyez sur ENTREE pour revenir au menu GhostWin..." -ForegroundColor DarkGray
+            $null = Read-Host
+        }
     }
 }
 
