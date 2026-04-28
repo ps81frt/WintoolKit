@@ -467,7 +467,20 @@ function Invoke-DiagBoot {
             Write-INFO  "  3. Disque de boot non visible depuis cette session (StorageSpace, RAID)"
         }
     } else {
-        
+        # Construire map HarddiskVolumeX -> DiskNumber
+        # Chaine : Win32_Volume.DeviceID = \\?\Volume{GUID}\
+        #          Get-Partition.Guid     = {GUID}
+        #          -> croisement GUID -> DiskNumber
+        # bcdedit retourne : device = partition=\Device\HarddiskVolumeX
+        # Win32_Volume.DeviceID retourne aussi \\?\Volume{GUID}\ mais pas HarddiskVolumeX directement
+        # On utilise la propriete Name ou Caption de Win32_LogicalDisk OU
+        # on passe par Get-Volume -> FileSystemLabel/UniqueId -> Get-Partition
+        # Methode la plus robuste : Get-Partition possede AccessPaths qui contient \\?\Volume{GUID}\
+        # On mappe AccessPath{GUID} -> DiskNumber, puis on resout HarddiskVolumeX via Win32_Volume
+
+        # Map HarddiskVolumeX -> DiskNumber
+        # Chaine : Get-Partition.AccessPaths -> Volume{GUID} -> QueryDosDevice -> HarddiskVolumeX
+        # Add-Type NativeHelper en dehors du try interne pour eviter conflit si deja declare
         $hdVolToDisk = @{}
         $volGuidToDisk = @{}
         foreach ($p in $allParts) {
@@ -6956,6 +6969,7 @@ function Invoke-ComparePC {
 
 # ===========================================================================
 #  MODULE 9 — EVCDiag : Crashes / Kernel / IO / Drivers
+#  Intégré depuis EVCDiag.ps1 (ps81frt — MIT)
 # ===========================================================================
 function Invoke-EVCDiag {
     Assert-AdminPrivilege
@@ -8327,7 +8341,25 @@ public class GW_Win32 {
 
             $pid2 = 0
             [GW_Win32]::GetWindowThreadProcessId($hwnd, [ref]$pid2) | Out-Null
-            $proc = (Get-Process -Id $pid2 -ErrorAction SilentlyContinue).Name
+            $proc = ""
+            $procPath = ""
+            $procFolder = ""
+            $parentPid = 0
+            $parentProcess = ""
+            try {
+                $procObj = Get-CimInstance Win32_Process -Filter "ProcessId = $pid2" -ErrorAction Stop
+                if ($procObj) {
+                    $proc = $procObj.Name
+                    $procPath = $procObj.ExecutablePath
+                    $procFolder = if ($procPath) { Split-Path $procPath } else { "" }
+                    $parentPid = $procObj.ParentProcessId
+                    if ($parentPid) {
+                        $parentProcess = (Get-Process -Id $parentPid -ErrorAction SilentlyContinue).Name
+                    }
+                }
+            } catch {
+                $proc = (Get-Process -Id $pid2 -ErrorAction SilentlyContinue).Name
+            }
 
             $exStyle     = [GW_Win32]::GetWindowLong($hwnd, [GW_Win32]::GWL_EXSTYLE)
             $layered     = ($exStyle -band [GW_Win32]::WS_EX_LAYERED)     -ne 0
@@ -8356,26 +8388,30 @@ public class GW_Win32 {
             }
 
             $list.Add([PSCustomObject]@{
-                HWND        = "0x{0:X}" -f $hwnd.ToInt64()
-                HWNDInt     = $hwnd.ToInt64()
-                Titre       = $sbT.ToString()
-                Classe      = $cls
-                Process     = $proc
-                PID         = $pid2
-                Visible     = $visible
-                Layered     = $layered
-                Transparent = $transparent
-                ToolWin     = $toolwin
-                Minimise    = $minimise
-                Left        = $rect.L
-                Top         = $rect.T
-                Right       = $rect.R
-                Bottom      = $rect.B
-                Largeur     = $w
-                Hauteur     = $h
-                Score       = $score
-                Raisons     = ($raisons -join ' | ')
-                ZoneMorte   = $zoneMorte
+                HWND           = "0x{0:X}" -f $hwnd.ToInt64()
+                HWNDInt        = $hwnd.ToInt64()
+                Titre          = $sbT.ToString()
+                Classe         = $cls
+                Process        = $proc
+                PID            = $pid2
+                ExecutablePath = $procPath
+                ProcessFolder  = $procFolder
+                ParentPID      = $parentPid
+                ParentProcess  = $parentProcess
+                Visible        = $visible
+                Layered        = $layered
+                Transparent    = $transparent
+                ToolWin        = $toolwin
+                Minimise       = $minimise
+                Left           = $rect.L
+                Top            = $rect.T
+                Right          = $rect.R
+                Bottom         = $rect.B
+                Largeur        = $w
+                Hauteur        = $h
+                Score          = $score
+                Raisons        = ($raisons -join ' | ')
+                ZoneMorte      = $zoneMorte
             })
         }
         return $list
@@ -8403,14 +8439,15 @@ public class GW_Win32 {
                 Write-INFO "Enumeration des fenetres..."
                 $wins = Get-AllGhostWindows
                 Write-Host ""
-                Write-Host ("  {0,-12} {1,-20} {2,-30} {3,-16} {4,5}  {5}" -f "HWND","Process","Classe","Titre","Score","Raisons") -ForegroundColor DarkCyan
-                Write-Host ("  " + "-"*110) -ForegroundColor DarkGray
+                Write-Host ("  {0,-12} {1,-20} {2,-35} {3,-28} {4,-16} {5,5}  {6}" -f "HWND","Process","Path","Classe","Titre","Score","Raisons") -ForegroundColor DarkCyan
+                Write-Host ("  " + "-"*140) -ForegroundColor DarkGray
                 foreach ($ww in ($wins | Sort-Object Score -Descending)) {
                     $t = if ($ww.Titre.Length -gt 15)  { $ww.Titre.Substring(0,15)  + "~" } else { $ww.Titre }
                     $c = if ($ww.Classe.Length -gt 29) { $ww.Classe.Substring(0,29) + "~" } else { $ww.Classe }
                     $p = if ($ww.Process -and $ww.Process.Length -gt 19) { $ww.Process.Substring(0,19)+"~" } else { $ww.Process }
+                    $path = if ($ww.ExecutablePath -and $ww.ExecutablePath.Length -gt 35) { $ww.ExecutablePath.Substring(0,32) + "..." } else { $ww.ExecutablePath }
                     $col = if ($ww.Score -ge 5) { "Red" } elseif ($ww.Score -ge 3) { "Yellow" } else { "Gray" }
-                    Write-Host ("  {0,-12} {1,-20} {2,-30} {3,-16} {4,5}  {5}" -f $ww.HWND,$p,$c,$t,$ww.Score,$ww.Raisons) -ForegroundColor $col
+                    Write-Host ("  {0,-12} {1,-20} {2,-35} {3,-28} {4,-16} {5,5}  {6}" -f $ww.HWND,$p,$path,$c,$t,$ww.Score,$ww.Raisons) -ForegroundColor $col
                 }
                 Write-Host ""; Write-INFO "$($wins.Count) fenetres  |  Rouge=Score>=5 (tres suspect)  |  Jaune=Score>=3"
             }
@@ -8447,7 +8484,7 @@ public class GW_Win32 {
                 # CSV
                 $csvPath = "$outDir2\GhostWin_$ts2.csv"
                 $wins | Sort-Object Score -Descending |
-                    Select-Object HWND,Titre,Classe,Process,PID,Visible,Layered,Transparent,
+                    Select-Object HWND,Titre,Classe,Process,PID,ExecutablePath,ProcessFolder,ParentPID,ParentProcess,Visible,Layered,Transparent,
                         ToolWin,Minimise,Left,Top,Right,Bottom,Largeur,Hauteur,Score,Raisons,ZoneMorte |
                     Export-Csv $csvPath -NoTypeInformation -Encoding UTF8
                 Write-OK "CSV : $csvPath"
@@ -8468,15 +8505,19 @@ public class GW_Win32 {
                     }
                     $zm = if ($_.ZoneMorte) { "<span class='badge badge-crit'>&#9632; ZONE</span>" } else { "" }
                     $lay = if ($_.Layered -and $_.Transparent) { "<span class='badge badge-warn'>L+T</span>" } elseif ($_.Layered) { "<span class='badge badge-info'>L</span>" } else { "" }
-                    "<tr class='$rowCls' data-score='$scoreVal'>
+                    $details = "PID=$($_.PID) ParentPID=$($_.ParentPID) Parent=$($_.ParentProcess) Folder=$($_.ProcessFolder) Visible=$($_.Visible) Layered=$($_.Layered) Transparent=$($_.Transparent) ToolWin=$($_.ToolWin) Minimise=$($_.Minimise) ZoneMorte=$($_.ZoneMorte)"
+                    "<tr class='$rowCls row-clickable' data-score='$scoreVal' data-pid='$($_.PID)' data-parentpid='$($_.ParentPID)' data-parentprocess='$($_.ParentProcess)' data-folder='$($_.ProcessFolder)' data-visible='$($_.Visible)' data-layered='$($_.Layered)' data-transparent='$($_.Transparent)' data-toolwin='$($_.ToolWin)' data-minimise='$($_.Minimise)'>
                       <td class='mono'>$($_.HWND)</td>
                       <td><b>$($_.Process)</b></td>
+                      <td class='mono small'>$($_.ExecutablePath)</td>
+                      <td class='mono small'>$($_.ParentProcess)</td>
                       <td class='mono small'>$($_.Classe)</td>
                       <td>$($_.Titre)</td>
                       <td>$badge $zm</td>
                       <td class='mono small'>$($_.Left),$($_.Top)<br>$($_.Right),$($_.Bottom)</td>
                       <td class='mono'>$($_.Largeur)&times;$($_.Hauteur)</td>
                       <td class='small'>$lay $($_.Raisons)</td>
+                      <td class='small'>$details</td>
                     </tr>"
                 }) -join "`n"
 
@@ -8530,8 +8571,16 @@ public class GW_Win32 {
   .toolbar input:focus { border-color: var(--blue); }
   .toolbar select { background: var(--bg2); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px; font-size: 13px; outline: none; cursor: pointer; }
   .toolbar label { color: var(--muted); font-size: 12px; }
-  .wrap { overflow-x: auto; border-radius: 10px; border: 1px solid var(--border); }
-  table { border-collapse: collapse; width: 100%; min-width: 900px; }
+  .wrap { overflow-x: auto; overflow-y: hidden; width: 100%; border-radius: 10px; border: 1px solid var(--border); }
+  .detail-pane { margin-bottom: 16px; padding: 16px; background: var(--bg2); border: 1px solid var(--border); border-radius: 10px; }
+  .detail-pane.hidden { display: none; }
+  .detail-title { font-size: 13px; font-weight: 700; color: var(--blue); margin-bottom: 10px; }
+  .detail-row { display: grid; grid-template-columns: 170px 1fr; gap: 8px; padding: 4px 0; border-bottom: 1px solid rgba(255,255,255,.06); }
+  .detail-row:last-child { border-bottom: none; }
+  .detail-key { color: var(--muted); font-size: 12px; text-transform: uppercase; }
+  .detail-value { font-family: 'Cascadia Code', 'Consolas', monospace; font-size: 12px; color: var(--text); word-break: break-all; }
+  .row-clickable:hover { cursor: pointer; filter: brightness(1.08); }
+  table { border-collapse: collapse; width: max-content; min-width: 900px; }
   thead th { background: var(--bg3); color: var(--blue); padding: 10px 12px; text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: .6px; position: sticky; top: 0; cursor: pointer; user-select: none; white-space: nowrap; border-bottom: 1px solid var(--border); }
   thead th:hover { background: #2a2f47; }
   thead th.sorted-asc::after  { content: ' ▲'; font-size: 10px; }
@@ -8578,17 +8627,24 @@ public class GW_Win32 {
 </div>
 
 <div class="wrap">
+<div class="detail-pane hidden" id="detailPane">
+  <div class="detail-title">Détails de la ligne sélectionnée</div>
+  <div id="detailContent"></div>
+</div>
 <table id="gwTable">
   <thead>
     <tr>
       <th onclick="sortTable(0)">HWND</th>
       <th onclick="sortTable(1)">Process</th>
-      <th onclick="sortTable(2)">Classe</th>
-      <th onclick="sortTable(3)">Titre</th>
-      <th onclick="sortTable(4)">Score</th>
-      <th onclick="sortTable(5)">Position</th>
-      <th onclick="sortTable(6)">Taille</th>
+      <th onclick="sortTable(2)">ExecutablePath</th>
+      <th onclick="sortTable(3)">ParentProcess</th>
+      <th onclick="sortTable(4)">Classe</th>
+      <th onclick="sortTable(5)">Titre</th>
+      <th onclick="sortTable(6)">Score</th>
+      <th onclick="sortTable(7)">Position</th>
+      <th onclick="sortTable(8)">Taille</th>
       <th>Raisons</th>
+      <th>Infos</th>
     </tr>
   </thead>
   <tbody>
@@ -8599,7 +8655,7 @@ $rows
 <div class="footer" id="countLine"></div>
 
 <script>
-var sortCol = 4, sortDir = -1;
+var sortCol = 6, sortDir = -1;
 
 function applyFilters() {
   var q    = document.getElementById('search').value.toLowerCase();
@@ -8616,6 +8672,44 @@ function applyFilters() {
     if (show) vis++;
   });
   document.getElementById('countLine').textContent = vis + ' fenetre(s) affichee(s)';
+}
+
+function showDetail(row) {
+  var detail = document.getElementById('detailPane');
+  var content = document.getElementById('detailContent');
+  var fields = [
+    ['HWND', row.cells[0].innerText],
+    ['Process', row.cells[1].innerText],
+    ['ExecutablePath', row.cells[2].innerText],
+    ['ParentProcess', row.cells[3].innerText],
+    ['Classe', row.cells[4].innerText],
+    ['Titre', row.cells[5].innerText],
+    ['Score', row.cells[6].innerText],
+    ['Position', row.cells[7].innerText],
+    ['Taille', row.cells[8].innerText],
+    ['Raisons', row.cells[9].innerText],
+    ['PID', row.dataset.pid],
+    ['ParentPID', row.dataset.parentpid],
+    ['ProcessFolder', row.dataset.folder],
+    ['Visible', row.dataset.visible],
+    ['Layered', row.dataset.layered],
+    ['Transparent', row.dataset.transparent],
+    ['ToolWin', row.dataset.toolwin],
+    ['Minimise', row.dataset.minimise],
+    ['ZoneMorte', row.dataset.zonemorte]
+  ];
+  content.innerHTML = fields.map(function(f) {
+    return '<div class="detail-row"><div class="detail-key">' + f[0] + '</div><div class="detail-value">' + (f[1] || '') + '</div></div>';
+  }).join('');
+  detail.classList.remove('hidden');
+  detail.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+function attachRowHandlers() {
+  var rows = document.querySelectorAll('#gwTable tbody tr');
+  rows.forEach(function(r) {
+    r.addEventListener('dblclick', function() { showDetail(r); });
+  });
 }
 
 function sortTable(col) {
@@ -8636,7 +8730,7 @@ function sortTable(col) {
   });
 }
 
-window.onload = function() { applyFilters(); sortTable(4); };
+window.onload = function() { applyFilters(); sortTable(6); attachRowHandlers(); };
 </script>
 </body>
 </html>
@@ -8681,7 +8775,6 @@ window.onload = function() { applyFilters(); sortTable(4); };
         $null = Read-Host
     }
 }
-
 
 function Show-MainMenu {
     while ($true) {
