@@ -8420,19 +8420,28 @@ public class GW_Win32 {
     while ($true) {
         Write-Host ""
         Write-Host "  ╔══════════════════════════════════════════════════════════════╗" -ForegroundColor DarkCyan
-        Write-Host "  ║     MODULE 11 — GhostWin  (Fenetres fantomes / zones)       ║" -ForegroundColor DarkCyan
+        Write-Host "  ║     MODULE 11 — GhostWin  (Fenetres fantomes / zones)        ║" -ForegroundColor DarkCyan
         Write-Host "  ╠══════════════════════════════════════════════════════════════╣" -ForegroundColor DarkCyan
-        Write-Host "  ║  S.  Scan       — Toutes les fenetres + score de suspicion  ║" -ForegroundColor White
-        Write-Host "  ║  Z.  ZoneMorte  — Fenetres suspectes bas d ecran seulement  ║" -ForegroundColor Yellow
-        Write-Host "  ║  E.  Export     — CSV + rapport HTML sur le Bureau          ║" -ForegroundColor White
-        Write-Host "  ║  R.  Reset DWM  — Equivalent Win+Ctrl+Shift+B              ║" -ForegroundColor Magenta
-        Write-Host "  ║  K.  Kill       — Fermer une fenetre par son HWND           ║" -ForegroundColor Red
-        Write-Host "  ║  0.  Retour menu principal                                  ║" -ForegroundColor DarkGray
+        Write-Host "  ║  S.  Scan       — Toutes les fenetres + score de suspicion   ║" -ForegroundColor White
+        Write-Host "  ║  Z.  ZoneMorte  — Fenetres suspectes bas d ecran seulement   ║" -ForegroundColor Yellow
+        Write-Host "  ║  E.  Export     — CSV + rapport HTML sur le Bureau           ║" -ForegroundColor White
+        Write-Host "  ║  R.  Reset DWM  — Equivalent Win+Ctrl+Shift+B                ║" -ForegroundColor Magenta
+        Write-Host "  ║  K.  Kill       — Fermer une fenetre par son HWND            ║" -ForegroundColor Red
+        Write-Host "  ║  0.  Retour menu principal                                   ║" -ForegroundColor DarkGray
         Write-Host "  ╚══════════════════════════════════════════════════════════════╝" -ForegroundColor DarkCyan
         Write-Host ""
+        Write-Host "  Astuce : vous pouvez saisir SZ, SZE, SE, etc. pour enchainer plusieurs actions." -ForegroundColor DarkGray
         $gwChoice = (Read-Host "  Votre choix").ToUpper().Trim()
+        $skipPause = $false
 
-        switch ($gwChoice) {
+        if ($gwChoice -match '^[SZE]+$' -and $gwChoice.Length -gt 1) {
+            $gwActions = $gwChoice.ToCharArray()
+        } else {
+            $gwActions = @($gwChoice)
+        }
+
+        foreach ($gwChoice in $gwActions) {
+            switch ($gwChoice) {
 
             "S" {
                 Write-Title "GhostWin — SCAN COMPLET"
@@ -8450,6 +8459,7 @@ public class GW_Win32 {
                     Write-Host ("  {0,-12} {1,-20} {2,-35} {3,-28} {4,-16} {5,5}  {6}" -f $ww.HWND,$p,$path,$c,$t,$ww.Score,$ww.Raisons) -ForegroundColor $col
                 }
                 Write-Host ""; Write-INFO "$($wins.Count) fenetres  |  Rouge=Score>=5 (tres suspect)  |  Jaune=Score>=3"
+                $skipPause = $true
             }
 
             "Z" {
@@ -8488,6 +8498,7 @@ public class GW_Win32 {
                         ToolWin,Minimise,Left,Top,Right,Bottom,Largeur,Hauteur,Score,Raisons,ZoneMorte |
                     Export-Csv $csvPath -NoTypeInformation -Encoding UTF8
                 Write-OK "CSV : $csvPath"
+                $skipPause = $true
 
                 # HTML — tableau interactif tri + filtre
                 $htmlPath = "$outDir2\GhostWin_$ts2.html"
@@ -8771,8 +8782,11 @@ window.onload = function() { applyFilters(); sortTable(6); attachRowHandlers(); 
             "0" { return }
             default { Write-WARN "Choix invalide." }
         }
-        Write-Host ""; Write-Host "  Appuyez sur ENTREE pour revenir au menu GhostWin..." -ForegroundColor DarkGray
-        $null = Read-Host
+        }
+        if (-not $skipPause) {
+            Write-Host ""; Write-Host "  Appuyez sur ENTREE pour revenir au menu GhostWin..." -ForegroundColor DarkGray
+            $null = Read-Host
+        }
     }
 }
 
