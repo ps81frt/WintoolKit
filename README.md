@@ -12,7 +12,24 @@ Add-MpPreference -ExclusionPath "$env:USERPROFILE\Downloads\Wintoolkit.ps1"
 cd "$env:USERPROFILE\Downloads"
 .\Wintoolkit.ps1
 ```
+# Installation permanente
 
+```powershell
+$wtkPath = "C:\Program Files\Wintoolkit"
+$wtkScript = "$wtkPath\Wintoolkit.ps1"
+New-Item -Path $wtkPath -ItemType Directory -Force | Out-Null
+iwr https://raw.githubusercontent.com/ps81frt/WintoolKit/main/Wintoolkit.ps1 -OutFile $wtkScript
+Unblock-File -Path $wtkScript
+Add-MpPreference -ExclusionPath $wtkPath
+if (!(Test-Path $PROFILE)) {
+    New-Item -Type File -Path $PROFILE -Force | Out-Null
+}
+$func = 'function Wintoolkit { & "C:\Program Files\Wintoolkit\Wintoolkit.ps1" }'
+$profileContent = Get-Content $PROFILE -Raw -ErrorAction SilentlyContinue
+if ($profileContent -notlike "*Wintoolkit*") {
+    Add-Content $PROFILE $func
+}
+```
 ## 💡 Tip
 
 You can include the app folder in your antivirus' exclusion list to prevent issues due to antivirus detections.
