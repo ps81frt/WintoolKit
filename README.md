@@ -52,7 +52,7 @@ cd "$env:USERPROFILE\Downloads"
 
 ```powershell
 &{
-Invoke-WebRequest https://raw.githubusercontent.com/ps81frt/WintoolKit/refs/heads/main/install.ps1 -OutFile "$env:USERPROFILE\Downloads\Install.ps1 -UseBasicParsing"
+Invoke-WebRequest https://raw.githubusercontent.com/ps81frt/WintoolKit/main/Install.ps1 -OutFile "$env:USERPROFILE\Downloads\Install.ps1" -UseBasicParsing
 Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 & "$env:USERPROFILE\Downloads\Install.ps1"
 }
