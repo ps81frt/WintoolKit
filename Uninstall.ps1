@@ -52,10 +52,21 @@ Write-Host "    [7] Entree PATH : C:\Tools\LinuxToolOn-Windows" -ForegroundColor
 Write-Host ""
 Write-Host "  ======================================================" -ForegroundColor Red
 Write-Host ""
-$confirm = Read-Host "  Confirmer la desinstallation ? (O/N)"
-if ($confirm -notmatch "^[Oo]$") {
+
+do {
+    $confirm = Read-Host "  Confirmer la desinstallation ? (O/Y = oui, N = non)"
+    if ($confirm -notmatch "^[OoYyNn]$") {
+        Write-Host ""
+        Write-Host "  Entree invalide. Repondez par O, Y ou N." -ForegroundColor Red
+        Write-Host ""
+    }
+} while ($confirm -notmatch "^[OoYyNn]$")
+
+if ($confirm -notmatch "^[OoYy]$") {
     Write-Host ""
     Write-Host "  Annulé." -ForegroundColor Yellow
+    Write-Host ""
+    Read-Host "  Appuyez sur Entree pour quitter"
     exit
 }
 Write-Host ""
@@ -153,3 +164,5 @@ Write-Host "  ======================================================" -Foregroun
 Write-Host "   [DONE] Désinstallation WinToolKit complète." -ForegroundColor Green
 Write-Host "  ======================================================" -ForegroundColor Green
 Write-Host ""
+
+Read-Host "  Appuyez sur Entree pour quitter"

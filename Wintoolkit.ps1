@@ -1487,10 +1487,10 @@ if ($lsaVal -eq 1 -or $lsaVal -eq 2) {
 #----------------------------------------------------
 Write-Host "`n>>> Pare-feu :" -ForegroundColor Yellow
 $fw = Get-NetFirewallProfile
-foreach ($profile in $fw) {
-    $icon  = if ($profile.Enabled) { "[OK]" } else { "[KO]" }
-    $color = if ($profile.Enabled) { "Green" } else { "Red" }
-    Write-Host "   $icon  $($profile.Name.PadRight(12)) : $(if($profile.Enabled){'Actif'}else{'DESACTIVE'})" -ForegroundColor $color
+foreach ($profiler in $fw) {
+    $icon  = if ($profiler.Enabled) { "[OK]" } else { "[KO]" }
+    $color = if ($profiler.Enabled) { "Green" } else { "Red" }
+    Write-Host "   $icon  $($profiler.Name.PadRight(12)) : $(if($profile.Enabled){'Actif'}else{'DESACTIVE'})" -ForegroundColor $color
 }
 
 if ($fw.Enabled -contains $false) {
@@ -3239,7 +3239,7 @@ function Invoke-NetShare {
     $DNSClientParent = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT'
     $LLMNRVal        = Get-RegValue $RegPaths.DNS 'EnableMulticast'
     $DNSClientExists = Test-Path $DNSClientPath
-    $NetBIOSAdapters = Set-Safe-Get { Get-WmiObject Win32_NetworkAdapterConfiguration | Where-Object { $_.TcpipNetbiosOptions -ne $null } } @()
+    $NetBIOSAdapters = Set-Safe-Get { Get-WmiObject Win32_NetworkAdapterConfiguration | Where-Object { $null -ne $_.TcpipNetbiosOptions } } @()
     $NetBIOSStatus = ($NetBIOSAdapters | ForEach-Object {
     switch ($_.TcpipNetbiosOptions) { 0{'Par defaut (DHCP)'} 1{'Active'} 2{'Desactive'} }
     }) | Select-Object -Unique
