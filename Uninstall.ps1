@@ -81,15 +81,15 @@ $tmpDir             = Join-Path $env:TEMP "LinuxTools_EVC"
 $tmpZip             = Join-Path $env:TEMP "LinuxToolOn-Windows.zip"
 $sys32              = "$env:SystemRoot\System32"
 
-Write-Host "[1/7] Suppression exclusion Defender (Program Files)..."
+Write-Host "[1/8] Suppression exclusion Defender (Program Files)..."
 Remove-MpPreference -ExclusionPath $wtkPath -ErrorAction SilentlyContinue
 Write-Host "[OK]"
 
-Write-Host "[2/7] Suppression exclusion Defender (Downloads)..."
+Write-Host "[2/8] Suppression exclusion Defender (Downloads)..."
 Remove-MpPreference -ExclusionPath $wtkDownloads -ErrorAction SilentlyContinue
 Write-Host "[OK]"
 
-Write-Host "[3/7] Nettoyage profil PowerShell..."
+Write-Host "[3/8] Nettoyage profil PowerShell..."
 if (Test-Path $PROFILE) {
     $content = Get-Content $PROFILE -Raw -ErrorAction SilentlyContinue
     if ($content -like "*Wintoolkit*") {
@@ -102,7 +102,7 @@ if (Test-Path $PROFILE) {
     }
 }
 
-Write-Host "[4/7] Suppression du dossier $wtkPath..."
+Write-Host "[4/8] Suppression du dossier $wtkPath..."
 if (Test-Path $wtkPath) {
     Remove-Item -Path $wtkPath -Recurse -Force
     Write-Host "[OK]"
@@ -110,7 +110,7 @@ if (Test-Path $wtkPath) {
     Write-Host "[SKIP] Dossier déjà absent."
 }
 
-Write-Host "[5/7] Suppression de $wtkDownloads..."
+Write-Host "[5/8] Suppression de $wtkDownloads..."
 if (Test-Path $wtkDownloads) {
     Remove-Item -Path $wtkDownloads -Force
     Write-Host "[OK]"
@@ -118,7 +118,7 @@ if (Test-Path $wtkDownloads) {
     Write-Host "[SKIP] Fichier déjà absent."
 }
 
-Write-Host "[6/7] Suppression des binaires LinuxToolsOnWindows de System32..."
+Write-Host "[6/8] Suppression des binaires LinuxToolsOnWindows de System32..."
 if (-not (Test-Path $tmpZip)) {
     Write-Host "[INFO] Téléchargement du zip pour récupérer la liste exacte des fichiers..."
     try {
@@ -151,10 +151,17 @@ if (Test-Path $tmpZip) {
 
     Remove-Item $tmpZip -Force -ErrorAction SilentlyContinue
     Remove-Item $tmpDir -Recurse -Force -ErrorAction SilentlyContinue
-    Remove-Item $wtfDownloadinstall -Force -ErrorAction SilentlyContinue
 }
 
-Write-Host "[7/7] Nettoyage PATH..."
+Write-Host "[7/8] Suppression de $wtfDownloadinstall..."
+if (Test-Path $wtfDownloadinstall) {
+    Remove-Item -Path $wtfDownloadinstall -Force
+    Write-Host "[OK]"
+} else {
+    Write-Host "[SKIP] Fichier déjà absent."
+}
+
+Write-Host "[8/8] Nettoyage PATH..."
 $currentPath = [Environment]::GetEnvironmentVariable("PATH", "Machine")
 if ($currentPath -like "*LinuxToolOn-Windows*") {
     $newPath = ($currentPath -split ";" | Where-Object { $_ -notlike "*LinuxToolOn-Windows*" }) -join ";"
