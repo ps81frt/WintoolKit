@@ -50,7 +50,7 @@ try {
     $wtkPath = "C:\Program Files\Wintoolkit"
     $wtkScript = "$wtkPath\Wintoolkit.ps1"
     New-Item -Path $wtkPath -ItemType Directory -Force | Out-Null
-    Invoke-WebRequest -Uri https://raw.githubusercontent.com/ps81frt/WintoolKit/main/Wintoolkit.ps1 -OutFile $wtkScript
+    Invoke-WebRequest https://raw.githubusercontent.com/ps81frt/WintoolKit/main/Wintoolkit.ps1 -OutFile $wtkScript -UseBasicParsing
     Unblock-File -Path $wtkScript
     Add-MpPreference -ExclusionPath $wtkPath
     if (!(Test-Path $PROFILE)) {
