@@ -71,11 +71,12 @@ if ($confirm -notmatch "^[OoYy]$") {
 }
 Write-Host ""
 
-$wtkPath      = "C:\Program Files\Wintoolkit"
-$wtkDownloads = "$env:USERPROFILE\Downloads\Wintoolkit.ps1"
-$tmpDir       = Join-Path $env:TEMP "LinuxTools_EVC"
-$tmpZip       = Join-Path $env:TEMP "LinuxToolOn-Windows.zip"
-$sys32        = "$env:SystemRoot\System32"
+$wtkPath            = "C:\Program Files\Wintoolkit"
+$wtkDownloads       = "$env:USERPROFILE\Downloads\Wintoolkit.ps1"
+$wtfDownloadinstall = "$env:USERPROFILE\Downloads\install.ps1"
+$tmpDir             = Join-Path $env:TEMP "LinuxTools_EVC"
+$tmpZip             = Join-Path $env:TEMP "LinuxToolOn-Windows.zip"
+$sys32              = "$env:SystemRoot\System32"
 
 Write-Host "[1/7] Suppression exclusion Defender (Program Files)..."
 Remove-MpPreference -ExclusionPath $wtkPath -ErrorAction SilentlyContinue
@@ -147,6 +148,7 @@ if (Test-Path $tmpZip) {
 
     Remove-Item $tmpZip -Force -ErrorAction SilentlyContinue
     Remove-Item $tmpDir -Recurse -Force -ErrorAction SilentlyContinue
+    Remove-Item $wtfDownloadinstall -Force -ErrorAction SilentlyContinue
 }
 
 Write-Host "[7/7] Nettoyage PATH..."
