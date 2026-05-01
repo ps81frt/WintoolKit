@@ -54,7 +54,7 @@ cd "$env:USERPROFILE\Downloads"
 &{
 Invoke-WebRequest https://raw.githubusercontent.com/ps81frt/WintoolKit/main/Install.ps1 -OutFile "$env:USERPROFILE\Downloads\Install.ps1" -UseBasicParsing
 Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
-& "$env:USERPROFILE\Downloads\Install.ps1"
+& "$env:USERPROFILE\Downloads\install.ps1"
 }
 ```
 
