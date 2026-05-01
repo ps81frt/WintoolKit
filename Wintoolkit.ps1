@@ -1215,7 +1215,6 @@ function Invoke-SecurityFix {
 
         "Defender" { 
             Write-Host "Réactivation forcée des moteurs Defender..." -ForegroundColor Gray
-            # WARN #4 CORRIGÉ : vérifier TamperProtection avant d'appliquer le fix
             $mpStatus = Get-MpComputerStatus -ErrorAction SilentlyContinue
             if ($mpStatus -and $mpStatus.IsTamperProtected) {
                 Write-Host "⚠ ATTENTION : La protection contre les falsifications (Tamper Protection) est activée." -ForegroundColor Yellow
@@ -1295,7 +1294,6 @@ $avProducts = $avRaw | ForEach-Object {
         default               { "INACTIF" }
     }
 
-    # FIX FANTOME : un AV dans WMI sans service actif = résidu de désinstallation
     $nomLower = $_.displayName.ToLower()
     $vendorEntry = $vendorDB.GetEnumerator() | Where-Object { $nomLower -like "*$($_.Key.ToLower())*" } | Select-Object -First 1
     $servicePresent = $true
@@ -1367,7 +1365,6 @@ try {
     }
 
     if ($mp.RealTimeProtectionEnabled -eq $false) {
-        # BUG #2 CORRIGÉ : vérifier aussi via vendorDB/services si un AV tiers est réellement actif
         $avTiersActifService = $vendorDB.GetEnumerator() | Where-Object {
             -not $_.Value.HorsSecurityCenter -and
             (Get-Service $_.Value.ServiceName -ErrorAction SilentlyContinue | Where-Object { $_.Status -eq 'Running' })
@@ -1617,7 +1614,6 @@ if ($avProducts.Count -gt 1) {
         Write-Host "OK : Cohabitation propre détectée. Seul [$($activeAV[0].displayName)] assure la protection temps réel." -ForegroundColor Green
         Add-ScoreCheck -Nom "Multi-AV sans conflit" -OK $true -Poids 15
 
-    # BUG #1 CORRIGÉ : cas Count -eq 0 (aucun actif parmi plusieurs installés)
     } else {
         $edrCompense = $edrActifs.Count -gt 0
         if ($edrCompense) {
@@ -1648,7 +1644,6 @@ if ($avProducts.Count -gt 1) {
     }
 
 } else {
-    # BUG #1 CORRIGÉ : Count -eq 0 sans EDR
     if ($edrActifs.Count -gt 0) {
         Write-Host "ℹ INFO : Aucun AV dans SecurityCenter mais EDR actif(s) détecté(s) : [$($edrActifs.Nom -join ' / ')]." -ForegroundColor Cyan
         Add-ScoreCheck -Nom "Protection active (EDR)" -OK $true -Poids 15
@@ -2897,7 +2892,6 @@ function Invoke-NetShare {
     }
 
 
-    # DEBUG : Affichage du nombre d'objets collectes pour SMB (pour aider a identifier les erreurs d'acces aux cmdlets)
     Write-DebugHost "DEBUG: SMBShares=$(@($SMBShares).Count) SMBSessions=$(@($SMBSessions).Count) SMBConnections=$(@($SMBConnections).Count)"
 
     # 8. SESSIONS SMB ACTIVES
@@ -3425,7 +3419,6 @@ function Invoke-NetShare {
     }
 
 
-    # DEBUG: Affichage des compteurs de donnees collectees
     Write-DebugHost "DEBUG: Shares=$(@($Shares).Count) SMBShares=$(@($SMBShares).Count) SMBSessions=$(@($SMBSessions).Count) SMBConnections=$(@($SMBConnections).Count)"
     Write-DebugHost "DEBUG: SMBServerAvailable=$SMBServerAvailable SMBClientAvailable=$SMBClientAvailable"
 
@@ -6990,7 +6983,7 @@ function Invoke-EVCDiag {
 
         Write-Host "[INFO] awk non trouve. Telechargement depuis GitHub..."
 
-        $zipUrl = "https://github.com/ps81frt/EVC/raw/main/Evc/LinuxToolOn-Windows.zip"
+        $zipUrl = "https://github.com/ps81frt/LinuxToolsOnWindows/releases/download/1.0/LinuxToolOn-Windows.zip"
         $tmpZip = Join-Path $env:TEMP "LinuxToolOn-Windows.zip"
         $tmpDir = Join-Path $env:TEMP "LinuxTools_EVC"
 
@@ -7289,10 +7282,19 @@ bloc ~ /IO success counts are/ {
                 # 4. Informations disques
                 $diskInfoFile = Join-Path $outputFolder "4_Disk_Information.txt"
                 Write-Section "4. Informations disques + SMART"
-                "===== INFORMATIONS MATERIELLES DES DISQUES =====" | Out-File $diskInfoFile -Encoding UTF8
+                $W = 180
+
+                function Write-Sep  { param($f) ('=' * $W) | Out-File $f -Append -Encoding UTF8 }
+                function Write-Sep2 { param($f) ('-' * $W) | Out-File $f -Append -Encoding UTF8 }
+
                 $physDisks   = Get-PhysicalDisk
                 $reliability = $physDisks | Get-StorageReliabilityCounter
-                $volsDisk    = Get-Volume | Where-Object { $_.DriveLetter } | Select-Object DiskNumber, DriveLetter
+                $volsDisk    = Get-Partition -EA SilentlyContinue | Where-Object { $_.DriveLetter } | Select-Object DiskNumber, DriveLetter
+                $volGuids = @{}
+                Get-Partition -EA SilentlyContinue | Where-Object { $_.DriveLetter } | ForEach-Object {
+                    $guid = ($_.AccessPaths | Where-Object { $_ -match '^\\\\\?\\Volume\{' } | Select-Object -First 1)
+                    if ($guid) { $volGuids[$_.DriveLetter.ToString()] = $guid.TrimEnd('\') }
+                }
                 $diskInfo = foreach ($disk in $physDisks) {
                     $rel = $reliability | Where-Object { $_.DeviceId -eq $disk.DeviceId } | Select-Object -First 1
                     $storportGuid = "N/A"
@@ -7313,8 +7315,8 @@ bloc ~ /IO success counts are/ {
                         SerialNumber           = $disk.SerialNumber
                         SizeGB                 = [math]::Round($disk.Size / 1GB, 2)
                         HealthStatus           = $disk.HealthStatus
-                        ReadErrorsUncorrected  = if ($rel) { $rel.ReadErrorsUncorrected  } else { 0 }
-                        WriteErrorsUncorrected = if ($rel) { $rel.WriteErrorsUncorrected } else { 0 }
+                        ReadErrorsUncorrected  = if ($rel -and $null -ne $rel.ReadErrorsUncorrected)  { [int]$rel.ReadErrorsUncorrected  } else { 0 }
+                        WriteErrorsUncorrected = if ($rel -and $null -ne $rel.WriteErrorsUncorrected) { [int]$rel.WriteErrorsUncorrected } else { 0 }
                         ReadLatencyMax_ms      = if ($rel) { $rel.ReadLatencyMax  } else { 0 }
                         WriteLatencyMax_ms     = if ($rel) { $rel.WriteLatencyMax } else { 0 }
                         WearPercent            = if ($rel) { $rel.Wear        } else { 0 }
@@ -7322,11 +7324,228 @@ bloc ~ /IO success counts are/ {
                         StorportGuid           = $storportGuid
                     }
                 }
-                $diskInfo | Select-Object DiskNumber, DriveLetter, Name, BusType, SizeGB, HealthStatus, Temperature_C, WearPercent |
-                    Format-Table -AutoSize | Out-File $diskInfoFile -Append -Encoding UTF8
-                $diskInfo | Select-Object DiskNumber, SerialNumber, ReadErrorsUncorrected, WriteErrorsUncorrected, ReadLatencyMax_ms, WriteLatencyMax_ms, StorportGuid |
-                    Format-Table -AutoSize | Out-File $diskInfoFile -Append -Encoding UTF8
-                $diskInfo | Format-Table -AutoSize | Out-File $diskInfoFile -Append -Encoding UTF8
+
+                function Find-Tool {
+                    param([string]$Name)
+                    $candidates = @(
+                        (Get-Command $Name       -ErrorAction SilentlyContinue)?.Source,
+                        (Get-Command "$Name.exe" -ErrorAction SilentlyContinue)?.Source,
+                        "$env:SystemRoot\System32\$Name.exe",
+                        "$env:SystemRoot\System32\$Name",
+                        "C:\Tools\LinuxToolOn-Windows\$Name.exe",
+                        "C:\Tools\LinuxToolOn-Windows\$Name"
+                    )
+                    return ($candidates | Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1)
+                }
+                $smartctlExe = Find-Tool "smartctl"
+                $hdparmExe   = Find-Tool "hdparm"
+                $lsblkExe    = Find-Tool "lsblk"
+                $sgInqExe    = Find-Tool "sg_inq"
+
+                if (-not $smartctlExe -or -not $hdparmExe -or -not $lsblkExe -or -not $sgInqExe) {
+                    Write-WARN "Outil(s) SMART absent(s) — tentative d'installation via LinuxToolsOnWindows..."
+                    Install-Awk | Out-Null
+
+                    $smartctlExe = Find-Tool "smartctl"
+                    $hdparmExe   = Find-Tool "hdparm"
+                    $lsblkExe    = Find-Tool "lsblk"
+                    $sgInqExe    = Find-Tool "sg_inq"
+                }
+
+                $header = [System.Text.StringBuilder]::new()
+                $null = $header.AppendLine(('=' * $W))
+                $null = $header.AppendLine("  RAPPORT DISQUES — $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')  |  Machine : $env:COMPUTERNAME")
+                $null = $header.AppendLine(('=' * $W))
+                $null = $header.AppendLine("")
+                $null = $header.AppendLine("  DISQUES DETECTES : $($physDisks.Count)")
+                $null = $header.AppendLine("")
+
+                foreach ($d in $diskInfo) {
+                    $smartFlag = if ($d.ReadErrorsUncorrected -gt 0 -or $d.WriteErrorsUncorrected -gt 0) { " *** ERREURS ***" } `
+                                 elseif ($d.ReadLatencyMax_ms -ge 100 -or $d.WriteLatencyMax_ms -ge 100) { " *** LATENCE ***" } `
+                                 else { " OK" }
+                    $vGuids = ($d.DriveLetter -split ',' | ForEach-Object {
+                        $l = $_.Trim()
+                        if ($l -and $volGuids.ContainsKey($l)) { "$l -> $($volGuids[$l])" } else { $null }
+                    } | Where-Object { $_ }) -join "  |  "
+                    if (-not $vGuids) { $vGuids = "N/A" }
+                    $null = $header.AppendLine(('-' * $W))
+                    $null = $header.AppendLine("  DISK $($d.DiskNumber)  |  $($d.Name)  |  $($d.BusType)  |  $($d.SizeGB) GB  |  Sante: $($d.HealthStatus)$smartFlag")
+                    $null = $header.AppendLine("    Lettre(s)    : $($d.DriveLetter)")
+                    $null = $header.AppendLine("    Volume GUID  : $vGuids")
+                    $null = $header.AppendLine("    Serie        : $($d.SerialNumber)")
+                    $null = $header.AppendLine("    Temperature  : $($d.Temperature_C) C    Usure: $($d.WearPercent) %")
+                    $null = $header.AppendLine("    Err. Lect.   : $($d.ReadErrorsUncorrected)    Err. Ecrit.: $($d.WriteErrorsUncorrected)")
+                    $null = $header.AppendLine("    Latence max  : Lect. $($d.ReadLatencyMax_ms) ms  /  Ecrit. $($d.WriteLatencyMax_ms) ms")
+                    $null = $header.AppendLine("    Storport GUID: $($d.StorportGuid)")
+                }
+                $null = $header.AppendLine(('=' * $W))
+
+                $null = $header.AppendLine("")
+                $null = $header.AppendLine("  OUTILS DE DIAGNOSTIC :")
+                foreach ($tool in @(
+                    @{Name="smartctl"; Path=$smartctlExe},
+                    @{Name="hdparm";   Path=$hdparmExe},
+                    @{Name="sg_inq";   Path=$sgInqExe},
+                    @{Name="lsblk";    Path=$lsblkExe}
+                )) {
+                    if ($tool.Path) {
+                        $null = $header.AppendLine("    [OK]     $($tool.Name.PadRight(10)) -> $($tool.Path)")
+                        Write-OK "$($tool.Name) detecte : $($tool.Path)"
+                    } else {
+                        $null = $header.AppendLine("    [ABSENT] $($tool.Name.PadRight(10)) -> non trouve (PATH / System32 / C:\Tools\LinuxToolOn-Windows)")
+                        Write-WARN "$($tool.Name) absent — fallback WMI/Get-Disk actif"
+                    }
+                }
+                $null = $header.AppendLine(('=' * $W))
+                $null = $header.AppendLine("")
+
+                $header.ToString() | Out-File $diskInfoFile -Encoding UTF8
+
+                "" | Out-File $diskInfoFile -Append -Encoding UTF8
+                "  TABLE 1 — Identification (Nom / BusType / Sante / Temperature / Usure)" | Out-File $diskInfoFile -Append -Encoding UTF8
+                Write-Sep2 $diskInfoFile
+                ($diskInfo | Select-Object DiskNumber, DriveLetter, Name, BusType, SizeGB, HealthStatus, Temperature_C, WearPercent |
+                    Format-Table -AutoSize | Out-String -Width $W).TrimEnd() | Out-File $diskInfoFile -Append -Encoding UTF8
+
+                "" | Out-File $diskInfoFile -Append -Encoding UTF8
+                "  TABLE 2 — Erreurs / Latences / SerialNumber / StorportGUID" | Out-File $diskInfoFile -Append -Encoding UTF8
+                Write-Sep2 $diskInfoFile
+                ($diskInfo | Select-Object DiskNumber, SerialNumber, ReadErrorsUncorrected, WriteErrorsUncorrected, ReadLatencyMax_ms, WriteLatencyMax_ms, StorportGuid |
+                    Format-List | Out-String -Width $W).TrimEnd() | Out-File $diskInfoFile -Append -Encoding UTF8
+
+                "" | Out-File $diskInfoFile -Append -Encoding UTF8
+                "  TABLE 3 — Toutes les colonnes" | Out-File $diskInfoFile -Append -Encoding UTF8
+                Write-Sep2 $diskInfoFile
+                ($diskInfo | Format-List | Out-String -Width $W).TrimEnd() | Out-File $diskInfoFile -Append -Encoding UTF8
+                "" | Out-File $diskInfoFile -Append -Encoding UTF8
+                Write-Sep $diskInfoFile
+
+                "" | Out-File $diskInfoFile -Append -Encoding UTF8
+                "  VOLUMES ET POINTS DE MONTAGE" | Out-File $diskInfoFile -Append -Encoding UTF8
+                Write-Sep2 $diskInfoFile
+                try {
+                    (Get-Volume -EA Stop | Select-Object DriveLetter, FileSystemLabel, FileSystem,
+                        @{N='SizeGB';E={[math]::Round($_.Size/1GB,2)}},
+                        @{N='FreeGB';E={[math]::Round($_.SizeRemaining/1GB,2)}},
+                        DriveType, OperationalStatus |
+                        Format-Table -AutoSize | Out-String -Width $W).TrimEnd() | Out-File $diskInfoFile -Append -Encoding UTF8
+                } catch {
+                    "  [Get-Volume] Non disponible : $_" | Out-File $diskInfoFile -Append -Encoding UTF8
+                }
+                "" | Out-File $diskInfoFile -Append -Encoding UTF8
+                "  GUID DES VOLUMES PAR LETTRE (Get-Partition.AccessPaths)" | Out-File $diskInfoFile -Append -Encoding UTF8
+                Write-Sep2 $diskInfoFile
+                try {
+                    Get-Partition -EA Stop | Sort-Object DiskNumber, PartitionNumber | ForEach-Object {
+                        $letter = if ($_.DriveLetter) { "$($_.DriveLetter):" } else { "(sans lettre)" }
+                        $guid   = ($_.AccessPaths | Where-Object { $_ -match '^\\\\\?\\Volume\{' } | Select-Object -First 1)
+                        if (-not $guid) { $guid = "N/A" }
+                        "  Disk $($_.DiskNumber)  Part.$($_.PartitionNumber)  $($letter.PadRight(14)) $($_.Type.PadRight(10)) $guid" |
+                            Out-File $diskInfoFile -Append -Encoding UTF8
+                    }
+                } catch {
+                    "  [Get-Partition AccessPaths] Non disponible : $_" | Out-File $diskInfoFile -Append -Encoding UTF8
+                }
+                "" | Out-File $diskInfoFile -Append -Encoding UTF8
+                Write-Sep $diskInfoFile
+
+                $hdparmIndex = 0
+                $hdparmMap   = @{}
+                foreach ($pd in ($physDisks | Sort-Object DeviceId)) { $hdparmMap[$pd.DeviceId] = $hdparmIndex; $hdparmIndex++ }
+
+                foreach ($disk in $physDisks) {
+                    $devPath    = "\\.\PhysicalDrive$($disk.DeviceId)"           # sg_inq
+                    $devSmart   = "/dev/pd$($disk.DeviceId)"                     # smartctl : /dev/pdN
+                    $sdIdx      = $hdparmMap[$disk.DeviceId]
+                    $devSdX     = "/dev/sd$([char](97 + $sdIdx))"                # hdparm : /dev/sda, sdb...
+                    "" | Out-File $diskInfoFile -Append -Encoding UTF8
+                    Write-Sep $diskInfoFile
+                    "  DISQUE $($disk.DeviceId) — $($disk.FriendlyName)  [BusType: $($disk.BusType)]  [$devPath]" | Out-File $diskInfoFile -Append -Encoding UTF8
+                    Write-Sep $diskInfoFile
+
+                    if ($smartctlExe) {
+                        "" | Out-File $diskInfoFile -Append -Encoding UTF8
+                        "--- smartctl -x $devSmart ---" | Out-File $diskInfoFile -Append -Encoding UTF8
+                        Write-Sep2 $diskInfoFile
+                        try {
+                            $out = & $smartctlExe -x $devSmart 2>&1
+                            ($out | Out-String -Width $W).TrimEnd() | Out-File $diskInfoFile -Append -Encoding UTF8
+                            if ($out -match "SMART overall-health self-assessment test result: FAILED") {
+                                "" | Out-File $diskInfoFile -Append -Encoding UTF8
+                                "  !!! ALERTE : SMART FAILED detecte sur ce disque !!!" | Out-File $diskInfoFile -Append -Encoding UTF8
+                                Write-WARN "SMART FAILED detecte sur $($disk.FriendlyName) !"
+                            }
+                        } catch {
+                            "  [ERREUR smartctl] $_" | Out-File $diskInfoFile -Append -Encoding UTF8
+                            Write-WARN "[smartctl] Erreur sur $devSmart : $_"
+                        }
+                    } else {
+                        "" | Out-File $diskInfoFile -Append -Encoding UTF8
+                        "--- [smartctl absent] Fallback WMI MSStorageDriver_FailurePredictStatus ---" | Out-File $diskInfoFile -Append -Encoding UTF8
+                        Write-Sep2 $diskInfoFile
+                        try {
+                            $wmiSmart = Get-WmiObject -Namespace root\wmi -Class MSStorageDriver_FailurePredictStatus -ErrorAction Stop |
+                                Where-Object { $_.InstanceName -like "*$($disk.SerialNumber)*" -or $_.InstanceName -like "*PhysicalDrive$($disk.DeviceId)*" } |
+                                Select-Object -First 1
+                            if ($wmiSmart) {
+                                "  PredictFailure : $($wmiSmart.PredictFailure)" | Out-File $diskInfoFile -Append -Encoding UTF8
+                                "  Reason         : $($wmiSmart.Reason)"         | Out-File $diskInfoFile -Append -Encoding UTF8
+                                if ($wmiSmart.PredictFailure) { Write-WARN "WMI SMART PredictFailure=True sur $($disk.FriendlyName) !" }
+                            } else {
+                                "  WMI : aucun objet SMART trouve pour ce disque." | Out-File $diskInfoFile -Append -Encoding UTF8
+                            }
+                        } catch {
+                            "  WMI SMART non disponible sur cette machine : $_" | Out-File $diskInfoFile -Append -Encoding UTF8
+                        }
+                    }
+
+                    if ($hdparmExe) {
+                        "" | Out-File $diskInfoFile -Append -Encoding UTF8
+                        if ($disk.BusType -in @('SATA','ATA')) {
+                            "--- hdparm -I $devSdX ---" | Out-File $diskInfoFile -Append -Encoding UTF8
+                            Write-Sep2 $diskInfoFile
+                            try { (& $hdparmExe -I $devSdX 2>&1 | Out-String -Width $W).TrimEnd() | Out-File $diskInfoFile -Append -Encoding UTF8 }
+                            catch { "  [ERREUR hdparm] $_" | Out-File $diskInfoFile -Append -Encoding UTF8 }
+                        } else {
+                            "--- [hdparm] Ignore : BusType=$($disk.BusType) (SATA/ATA uniquement) ---" | Out-File $diskInfoFile -Append -Encoding UTF8
+                        }
+                    }
+
+                    if ($sgInqExe) {
+                        "" | Out-File $diskInfoFile -Append -Encoding UTF8
+                        "--- sg_inq $devPath ---" | Out-File $diskInfoFile -Append -Encoding UTF8
+                        Write-Sep2 $diskInfoFile
+                        try { (& $sgInqExe $devPath 2>&1 | Out-String -Width $W).TrimEnd() | Out-File $diskInfoFile -Append -Encoding UTF8 }
+                        catch { "  [ERREUR sg_inq] $_" | Out-File $diskInfoFile -Append -Encoding UTF8 }
+                    }
+                }
+
+                "" | Out-File $diskInfoFile -Append -Encoding UTF8
+                Write-Sep $diskInfoFile
+                if ($lsblkExe) {
+                    "  lsblk — arborescence disques/partitions" | Out-File $diskInfoFile -Append -Encoding UTF8
+                    Write-Sep $diskInfoFile
+                    try { (& $lsblkExe 2>&1 | Out-String -Width $W).TrimEnd() | Out-File $diskInfoFile -Append -Encoding UTF8 }
+                    catch { "  [ERREUR lsblk] $_" | Out-File $diskInfoFile -Append -Encoding UTF8 }
+                } else {
+                    "  [lsblk absent] Fallback Get-Disk / Get-Partition" | Out-File $diskInfoFile -Append -Encoding UTF8
+                    Write-Sep $diskInfoFile
+                    try {
+                        (Get-Disk | Select-Object Number, FriendlyName, BusType,
+                            @{N="Size_GB";E={[math]::Round($_.Size/1GB,1)}},
+                            PartitionStyle, OperationalStatus |
+                            Format-Table -AutoSize | Out-String -Width $W).TrimEnd() | Out-File $diskInfoFile -Append -Encoding UTF8
+                        "" | Out-File $diskInfoFile -Append -Encoding UTF8
+                        (Get-Partition | Select-Object DiskNumber, PartitionNumber, DriveLetter,
+                            @{N="Size_GB";E={[math]::Round($_.Size/1GB,2)}}, Type |
+                            Format-Table -AutoSize | Out-String -Width $W).TrimEnd() | Out-File $diskInfoFile -Append -Encoding UTF8
+                    } catch {
+                        "  [ERREUR Get-Disk/Get-Partition] $_" | Out-File $diskInfoFile -Append -Encoding UTF8
+                    }
+                }
+                "" | Out-File $diskInfoFile -Append -Encoding UTF8
+                Write-Sep $diskInfoFile
 
                 # Identification disque(s) defaillant(s)
                 $candidateDisks = $diskInfo | Where-Object { $_.ReadErrorsUncorrected -gt 0 -or $_.WriteErrorsUncorrected -gt 0 }
