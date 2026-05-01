@@ -38,28 +38,34 @@ Requiert les droits **Administrateur**. Auto-élévation intégrée via `Start-P
 ### Utilisation directe (sans installation)
 
 ```powershell
+&{
 Invoke-WebRequest https://raw.githubusercontent.com/ps81frt/WintoolKit/main/Wintoolkit.ps1 -OutFile "$env:USERPROFILE\Downloads\Wintoolkit.ps1"
 Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 Unblock-File -Path "$env:USERPROFILE\Downloads\Wintoolkit.ps1"
 Add-MpPreference -ExclusionPath "$env:USERPROFILE\Downloads\Wintoolkit.ps1"
 cd "$env:USERPROFILE\Downloads"
 .\Wintoolkit.ps1
+}
 ```
 
 ### Installation permanente
 
 ```powershell
+&{
 Invoke-WebRequest https://raw.githubusercontent.com/ps81frt/WintoolKit/refs/heads/main/install.ps1 -OutFile "$env:USERPROFILE\Downloads\Install.ps1"
 Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 & "$env:USERPROFILE\Downloads\Install.ps1"
+}
 ```
 
 ### Désinstallation
 
 ```powershell
+&{
 Invoke-WebRequest https://raw.githubusercontent.com/ps81frt/WintoolKit/main/Uninstall.ps1 -OutFile "$env:USERPROFILE\Downloads\Uninstall.ps1"
 Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 & "$env:USERPROFILE\Downloads\Uninstall.ps1"
+}
 ```
 
 ---
