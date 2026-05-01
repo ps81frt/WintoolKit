@@ -8,7 +8,7 @@
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![Stars](https://img.shields.io/github/stars/ps81frt/WintoolKit)
 ![Last commit](https://img.shields.io/github/last-commit/ps81frt/WintoolKit)
-![Release](https://img.shields.io/github/v/release/ps81frt/WintoolKit)
+[![Release](https://img.shields.io/github/v/release/ps81frt/WintoolKit)](https://github.com/ps81frt/WintoolKit/releases)
 ![Downloads](https://img.shields.io/github/downloads/ps81frt/WintoolKit/total)
 [![Download](https://img.shields.io/badge/Download%20ZIP-1.0-blue)](https://github.com/ps81frt/WintoolKit/releases/download/1.0/Wintoolkit.zip)
 
