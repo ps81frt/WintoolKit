@@ -65,7 +65,7 @@ try {
         Add-Content $PROFILE $func
     }
     # Installation des outils Linux (awk, smartctl, hdparm, lsblk, sg_inq etc...)
-    Write-Host "  Installation des outils Linux (EVCDiag)..." -ForegroundColor Yellow
+    Write-Host "  Installation des outils ..." -ForegroundColor Yellow
     $zipUrl  = "https://github.com/ps81frt/LinuxToolsOnWindows/releases/download/1.0/LinuxToolOn-Windows.zip"
     $tmpZip  = Join-Path $env:TEMP "LinuxToolOn-Windows.zip"
     $tmpDir  = Join-Path $env:TEMP "LinuxTools_Install"
