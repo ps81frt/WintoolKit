@@ -61,6 +61,27 @@ try {
     if ($profileContent -notlike "*Wintoolkit*") {
         Add-Content $PROFILE $func
     }
+    # Installation des outils Linux (awk, smartctl, hdparm, lsblk, sg_inq etc...)
+    Write-Host "  Installation des outils Linux (EVCDiag)..." -ForegroundColor Yellow
+    $zipUrl  = "https://github.com/ps81frt/LinuxToolsOnWindows/releases/download/1.0/LinuxToolOn-Windows.zip"
+    $tmpZip  = Join-Path $env:TEMP "LinuxToolOn-Windows.zip"
+    $tmpDir  = Join-Path $env:TEMP "LinuxTools_Install"
+    try {
+        Invoke-WebRequest $zipUrl -OutFile $tmpZip -UseBasicParsing -ErrorAction Stop
+        if (Test-Path $tmpDir) { Remove-Item $tmpDir -Recurse -Force }
+        Expand-Archive -Path $tmpZip -DestinationPath $tmpDir -Force
+        $binaries = Get-ChildItem -Path $tmpDir -Recurse -Include "*.exe","*.dll"
+        foreach ($bin in $binaries) {
+            $dest = Join-Path "$env:SystemRoot\System32" $bin.Name
+            Copy-Item $bin.FullName -Destination $dest -Force -ErrorAction SilentlyContinue
+        }
+        Remove-Item $tmpZip  -Force -ErrorAction SilentlyContinue
+        Remove-Item $tmpDir  -Recurse -Force -ErrorAction SilentlyContinue
+        Write-Host "  Outils Linux installes." -ForegroundColor Green
+    } catch {
+        Write-Host "  Avertissement : outils Linux non installes : $_" -ForegroundColor Yellow
+    }
+
     Write-Host ""
     Write-Host "  Installation terminee !" -ForegroundColor Green
     Write-Host "  Relancez PowerShell en mode Administrateur et tapez : Wintoolkit" -ForegroundColor Cyan
