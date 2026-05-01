@@ -8954,9 +8954,13 @@ function Show-MainMenu {
                 Write-Host "  ║                SMART disques, erreurs drivers.               ║" -ForegroundColor Gray
                 Write-Host "  ║                Sortie : Bureau\EVC_Export\                   ║" -ForegroundColor DarkGray
                 Write-Host "  ╠══════════════════════════════════════════════════════════════╣" -ForegroundColor DarkCyan
-                Write-Host "  ║  10. CrashDiag BSOD, arrets brutaux, freezes, WHEA,         ║" -ForegroundColor White
+                Write-Host "  ║  10. CrashDiag BSOD, arrets brutaux, freezes, WHEA,          ║" -ForegroundColor White
                 Write-Host "  ║                app crash, sessions, contexte pre-crash.      ║" -ForegroundColor Gray
                 Write-Host "  ║                Sortie : Bureau\CrashDiag_<ts>\*.txt+*.html   ║" -ForegroundColor DarkGray
+                Write-Host "  ╠══════════════════════════════════════════════════════════════╣" -ForegroundColor DarkCyan
+                Write-Host "  ║  11. GhostWin   Detection fenetres fantomes /                ║" -ForegroundColor White
+                Write-Host "  ║                 zones mortes ecran                           ║" -ForegroundColor White
+                Write-Host "  ║                  Sortie : Bureau\GhostWin_<ts>\*.csv/.html   ║" -ForegroundColor DarkGray
                 Write-Host "  ╠══════════════════════════════════════════════════════════════╣" -ForegroundColor DarkYellow
                 Write-Host "  ║            PARAMETRES AVANCES (ligne de commande)            ║" -ForegroundColor Yellow
                 Write-Host "  ╠══════════════════════════════════════════════════════════════╣" -ForegroundColor DarkYellow
@@ -8965,9 +8969,9 @@ function Show-MainMenu {
                 Write-Host "  ╠══════════════════════════════════════════════════════════════╣" -ForegroundColor DarkYellow
                 Write-Host "  ║  MODULE DiagBoot                                             ║" -ForegroundColor Cyan
                 Write-Host "  ║    -DebugEFI       Active le log de debug du montage EFI     ║" -ForegroundColor White
-                Write-Host "  ║                   Genere : Bureau\DiagBoot_EFI_Debug_<ts>   ║" -ForegroundColor DarkGray
+                Write-Host "  ║                   Genere : Bureau\DiagBoot_EFI_Debug_<ts>    ║" -ForegroundColor DarkGray
                 Write-Host "  ║                   Utile si popup ou erreur montage partition ║" -ForegroundColor DarkGray
-                Write-Host "  ║                   Ex: .\WT.ps1 -Module DiagBoot -DebugEFI   ║" -ForegroundColor DarkGray
+                Write-Host "  ║                   Ex: .\WT.ps1 -Module DiagBoot -DebugEFI    ║" -ForegroundColor DarkGray
                 Write-Host "  ╠══════════════════════════════════════════════════════════════╣" -ForegroundColor DarkYellow
                 Write-Host "  ║  MODULE EDR                                                  ║" -ForegroundColor Cyan
                 Write-Host "  ║    -Fix <cible>    Applique un correctif de securite         ║" -ForegroundColor White
@@ -8977,14 +8981,14 @@ function Show-MainMenu {
                 Write-Host "  ╠══════════════════════════════════════════════════════════════╣" -ForegroundColor DarkYellow
                 Write-Host "  ║  MODULE WinDiag                                              ║" -ForegroundColor Cyan
                 Write-Host "  ║    -Query <val>    Recherche code erreur / DLL / mot-cle     ║" -ForegroundColor White
-                Write-Host "  ║                   Ex: .\WT.ps1 -Module WinDiag -Query 0xc0  ║" -ForegroundColor DarkGray
+                Write-Host "  ║                   Ex: .\WT.ps1 -Module WinDiag -Query 0xc0   ║" -ForegroundColor DarkGray
                 Write-Host "  ║    -Scan           Scanner les crashes dans l Event Log      ║" -ForegroundColor White
                 Write-Host "  ║    -Dump <chemin>  Analyser un fichier minidump .dmp         ║" -ForegroundColor White
                 Write-Host "  ╠══════════════════════════════════════════════════════════════╣" -ForegroundColor DarkYellow
                 Write-Host "  ║  MODULE NetShare                                             ║" -ForegroundColor Cyan
-                Write-Host "  ║    -NetMode <mode> COMPLET (defaut) ou PUBLIC (anonymise)   ║" -ForegroundColor White
-                Write-Host "  ║                   Ex: .\WT.ps1 -Module NetShare -NetMode    ║" -ForegroundColor DarkGray
-                Write-Host "  ║                       PUBLIC                                ║" -ForegroundColor DarkGray
+                Write-Host "  ║    -NetMode <mode> COMPLET (defaut) ou PUBLIC (anonymise)    ║" -ForegroundColor White
+                Write-Host "  ║                   Ex: .\WT.ps1 -Module NetShare -NetMode     ║" -ForegroundColor DarkGray
+                Write-Host "  ║                       PUBLIC                                 ║" -ForegroundColor DarkGray
                 Write-Host "  ╠══════════════════════════════════════════════════════════════╣" -ForegroundColor DarkYellow
                 Write-Host "  ║  MODULE ComparePC                                            ║" -ForegroundColor Cyan
                 Write-Host "  ║    -ReportFiles    Chemins des *-all.txt (2 a 10 fichiers)   ║" -ForegroundColor White
@@ -8993,7 +8997,7 @@ function Show-MainMenu {
                 Write-Host "  ╠══════════════════════════════════════════════════════════════╣" -ForegroundColor DarkYellow
                 Write-Host "  ║  MODULE CrashDiag                                            ║" -ForegroundColor Cyan
                 Write-Host "  ║    -HeuresHistorique <n>  Fenetre d'analyse (defaut : 48h)   ║" -ForegroundColor White
-                Write-Host "  ║                          Ex: .\WT.ps1 -Module CrashDiag \   ║" -ForegroundColor DarkGray
+                Write-Host "  ║                          Ex: .\WT.ps1 -Module CrashDiag \    ║" -ForegroundColor DarkGray
                 Write-Host "  ║                              -HeuresHistorique 96            ║" -ForegroundColor DarkGray
                 Write-Host "  ║    -ExportCSV             Generer aussi un fichier CSV       ║" -ForegroundColor White
                 Write-Host "  ║    -ExportHTML            Forcer la sortie HTML              ║" -ForegroundColor White
