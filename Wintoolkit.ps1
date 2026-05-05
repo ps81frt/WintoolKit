@@ -74,12 +74,37 @@ param(
     # -------------------------------------------------------------------------
     # CrashDiag — Analyse BSOD / freezes / WHEA / sessions / app crash
     # -------------------------------------------------------------------------
-    [int]$HeuresHistorique = 48,
+    [int]$HeuresHistorique = 72,
     [switch]$ExportCSV,
-    [switch]$ExportHTML
+    [switch]$ExportHTML,
+    [switch]$Watch,
+    [int]$IntervalSec = 60
 )
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'SilentlyContinue'
+
+# ===========================================================================
+#  ELEVATION GLOBALE — avant tout menu ou module
+# ===========================================================================
+$_isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent(
+    )).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+if (-not $_isAdmin) {
+    Write-Host ""
+    Write-Host "  Droits Administrateur requis — relancement automatique..." -ForegroundColor Yellow
+    $_argList = "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`""
+    foreach ($_kv in $PSBoundParameters.GetEnumerator()) {
+        $_k = $_kv.Key; $_v = $_kv.Value
+        if     ($_v -is [switch])   { if ($_v.IsPresent) { $_argList += " -$_k" } }
+        elseif ($_v -is [string[]])  { if ($_v.Count -gt 0) { $_argList += " -$_k " + ($_v -join ',') } }
+        elseif ($_v -is [string])    { if ($_v -ne '')       { $_argList += " -$_k `"$_v`"" } }
+        elseif ($_v -is [int])       { $_argList += " -$_k $_v" }
+    }
+    Start-Process pwsh        -ArgumentList $_argList -Verb RunAs -ErrorAction SilentlyContinue
+    if (-not $?) {
+        Start-Process powershell -ArgumentList $_argList -Verb RunAs
+    }
+    exit
+}
 
 # ===========================================================================
 #  SHARED UTILITIES
@@ -116,20 +141,13 @@ function Format-Size {
 }
 
 function Assert-AdminPrivilege {
-    $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
-        ).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+    # Elevation deja garantie au demarrage du script — garde-fou seulement
+    $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent(
+        )).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
     if (-not $isAdmin) {
-        Write-Host ""
-        Write-Host "  Ce module necessite les droits Administrateur." -ForegroundColor Yellow
-        Write-Host "  Relancement en mode Administrateur..." -ForegroundColor Yellow
-        $args2 = "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`""
-        if ($Module)  { $args2 += " -Module $Module" }
-        if ($Fix -ne "None") { $args2 += " -Fix $Fix" }
-        Start-Process pwsh -ArgumentList $args2 -Verb RunAs -ErrorAction SilentlyContinue
-        if (-not $?) {
-            Start-Process powershell -ArgumentList $args2 -Verb RunAs
-        }
-        exit
+        Write-ERR "Ce module necessite les droits Administrateur."
+        Write-ERR "Lancez le script via clic-droit > Executer en tant qu'administrateur."
+        exit 1
     }
 }
 
@@ -1487,10 +1505,10 @@ if ($lsaVal -eq 1 -or $lsaVal -eq 2) {
 #----------------------------------------------------
 Write-Host "`n>>> Pare-feu :" -ForegroundColor Yellow
 $fw = Get-NetFirewallProfile
-foreach ($profiler in $fw) {
-    $icon  = if ($profiler.Enabled) { "[OK]" } else { "[KO]" }
-    $color = if ($profiler.Enabled) { "Green" } else { "Red" }
-    Write-Host "   $icon  $($profiler.Name.PadRight(12)) : $(if($profile.Enabled){'Actif'}else{'DESACTIVE'})" -ForegroundColor $color
+foreach ($profile in $fw) {
+    $icon  = if ($profile.Enabled) { "[OK]" } else { "[KO]" }
+    $color = if ($profile.Enabled) { "Green" } else { "Red" }
+    Write-Host "   $icon  $($profile.Name.PadRight(12)) : $(if($profile.Enabled){'Actif'}else{'DESACTIVE'})" -ForegroundColor $color
 }
 
 if ($fw.Enabled -contains $false) {
@@ -3239,7 +3257,7 @@ function Invoke-NetShare {
     $DNSClientParent = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT'
     $LLMNRVal        = Get-RegValue $RegPaths.DNS 'EnableMulticast'
     $DNSClientExists = Test-Path $DNSClientPath
-    $NetBIOSAdapters = Set-Safe-Get { Get-WmiObject Win32_NetworkAdapterConfiguration | Where-Object { $null -ne $_.TcpipNetbiosOptions } } @()
+    $NetBIOSAdapters = Set-Safe-Get { Get-WmiObject Win32_NetworkAdapterConfiguration | Where-Object { $_.TcpipNetbiosOptions -ne $null } } @()
     $NetBIOSStatus = ($NetBIOSAdapters | ForEach-Object {
     switch ($_.TcpipNetbiosOptions) { 0{'Par defaut (DHCP)'} 1{'Active'} 2{'Desactive'} }
     }) | Select-Object -Unique
@@ -7718,9 +7736,13 @@ bloc ~ /IO success counts are/ {
 # ===========================================================================
 function Invoke-CrashDiag {
     param(
-        [int]$HeuresHistorique = 48,
+        [int]$HeuresHistorique = 72,
         [switch]$ExportCSV,
-        [switch]$HTML
+        [switch]$HTML,
+        [switch]$Watch,
+        [int]$IntervalSec = 60,
+        [switch]$ShareDpaste,
+        [switch]$ShareGofile
     )
     Assert-AdminPrivilege
 
@@ -7820,6 +7842,31 @@ function Invoke-CrashDiag {
                 $type = switch ($e.Id) { 1074{"ARRET-INITIE"} 1076{"ARRET-NON-PLANIFIE"} 7002{"SESSION-FIN"} default{"SESSION-SYS"} }
                 $u=""; $sid=""; $ts2=""; $ip=""
                 if ($e.Id -eq 7002 -and $e.Message -match "(?i)session\s+(\d+)") { $sid=$Matches[1] }
+                if ($e.Id -eq 7002) {
+                    try {
+                        $tD=$e.TimeCreated.AddSeconds(-30); $tF=$e.TimeCreated.AddSeconds(30)
+                        $secEvts = Get-WinEvent -FilterHashtable @{ LogName='Security'; Id=@(4634,4647,4624); StartTime=$tD } -EA SilentlyContinue |
+                            Where-Object { $_.TimeCreated -le $tF }
+                        foreach ($sv in $secEvts) {
+                            if (-not $u) {
+                                if ($sv.Message -match "Nom du compte\s*:\s*(\S+)")    { $u=$Matches[1] }
+                                elseif ($sv.Message -match "Account Name\s*:\s*(\S+)") { $u=$Matches[1] }
+                                if ($u -match "^\$|SYSTEM|LOCAL SERVICE|NETWORK SERVICE|ANONYMOUS") { $u="" }
+                            }
+                            if (-not $ts2 -and $sv.Id -eq 4624) {
+                                $lt=""
+                                if ($sv.Message -match "(?i)Type d.ouverture de session\s*:\s*(\d+)") { $lt=$Matches[1] }
+                                elseif ($sv.Message -match "(?i)Logon Type\s*:\s*(\d+)")              { $lt=$Matches[1] }
+                                $ts2=switch($lt){"2"{"Console"}"3"{"Network"}"4"{"Batch"}"5"{"Service"}"7"{"Unlock"}"10"{"RDP"}"11"{"CachedInteractive"}default{""}}
+                                if ($ts2 -match "RDP|Network") {
+                                    if ($sv.Message -match "(?i)Adresse du reseau source\s*:\s*(\S+)")   { $ip=$Matches[1] }
+                                    elseif ($sv.Message -match "(?i)Source Network Address\s*:\s*(\S+)") { $ip=$Matches[1] }
+                                    if ($ip -match "^(127\.|::1|-$)") { $ip="" }
+                                }
+                            }
+                        }
+                    } catch {}
+                }
                 $s += [PSCustomObject]@{
                     Date=$e.TimeCreated; Type=$type; User=$u
                     ID=$e.Id; TypeSession=$ts2; IPSource=$ip; SessionID=$sid
@@ -7927,24 +7974,62 @@ function Invoke-CrashDiag {
                     $type = switch ($_.Id) { 1002{"APP-HANG"} 1000{"APP-CRASH"} 1001{"APP-CRASH-WERFAULT"} default{"APP-ERREUR"} }
                     $m2   = $_.Message
                     $pf=""; $pm=""; $pc=""; $pp=""; $par=""; $ce=""; $ev=""; $dbg=""
-                    if ($m2 -match "(?mi)Nom de l(?:'|')application[^:]*:\s*([^\r\n,]+)")    { $pf=$Matches[1].Trim() }
-                    elseif ($m2 -match "(?mi)Faulting application name:\s*([^\r\n,]+)")      { $pf=$Matches[1].Trim() }
-                    if ($m2 -match "(?mi)Nom du module[^:]*:\s*([^\r\n,]+)")                 { $pm=$Matches[1].Trim() }
-                    elseif ($m2 -match "(?mi)Faulting module name:\s*([^\r\n,]+)")           { $pm=$Matches[1].Trim() }
-                    if ($m2 -match "(?mi)Chemin de l(?:'|')application[^:]*:\s*([^\r\n]+)") { $pc=$Matches[1].Trim() }
-                    elseif ($m2 -match "(?mi)Faulting application path:\s*([^\r\n]+)")      { $pc=$Matches[1].Trim() }
-                    if ($m2 -match "(?mi)Process Id\s*:\s*(\d+)")                            { $pp=$Matches[1].Trim() }
-                    if ($m2 -match "Code d.exception\s*:\s*(0x[0-9a-fA-F]+)")               { $ce=$Matches[1] }
-                    elseif ($m2 -match "Exception code:\s*(0x[0-9a-fA-F]+)")               { $ce=$Matches[1] }
-                    if ($m2 -match "(?mi)Nom d.év[eé]nement\s*:\s*([^\r\n]+)")              { $ev=$Matches[1].Trim() }
-                    elseif ($m2 -match "(?mi)Event Name\s*:\s*([^\r\n]+)")                  { $ev=$Matches[1].Trim() }
-                    if ($_.ProviderName -match "Winlogon|WerFault") { $dbg=$m2 }
-                    $src = if ($pf) { "$pf ($($_.ProviderName))" } else { $_.ProviderName }
+                    # FR
+                    if ($m2 -match "(?mi)Nom de l(?:'|')application[^:]*:\s*([^\r\n,]+)")              { $pf=$Matches[1].Trim() }
+                    elseif ($m2 -match "(?mi)application d[eé]faillante[^:]*:\s*([^\r\n,]+)")          { $pf=$Matches[1].Trim() }
+                    if ($m2 -match "(?mi)Nom du module[^:]*:\s*([^\r\n,]+)")                            { $pm=$Matches[1].Trim() }
+                    elseif ($m2 -match "(?mi)module d[eé]faillant[^:]*:\s*([^\r\n,]+)")                { $pm=$Matches[1].Trim() }
+                    if ($m2 -match "(?mi)Chemin de l(?:'|')application[^:]*:\s*([^\r\n]+)")            { $pc=$Matches[1].Trim() }
+                    elseif ($m2 -match "(?mi)Chemin d(?:'|')application[^:]*:\s*([^\r\n]+)")           { $pc=$Matches[1].Trim() }
+                    elseif ($m2 -match "(?mi)Chemin du module[^:]*:\s*([^\r\n]+)")                     { $pc=$Matches[1].Trim() }
+                    # EN
+                    if (-not $pf -and $m2 -match "(?mi)Faulting application name:\s*([^\r\n,]+)")      { $pf=$Matches[1].Trim() }
+                    if (-not $pm -and $m2 -match "(?mi)Faulting module name:\s*([^\r\n,]+)")            { $pm=$Matches[1].Trim() }
+                    if (-not $pc -and $m2 -match "(?mi)Faulting application path:\s*([^\r\n]+)")        { $pc=$Matches[1].Trim() }
+                    elseif (-not $pc -and $m2 -match "(?mi)Faulting module path:\s*([^\r\n]+)")         { $pc=$Matches[1].Trim() }
+                    if ($m2 -match "(?mi)Process Id\s*:\s*(\d+)")                                       { $pp=$Matches[1].Trim() }
+                    if ($m2 -match "(?mi)Parent Process\s*:\s*([^\r\n]+)")                              { $par=$Matches[1].Trim() }
+                    elseif ($m2 -match "(?mi)Parent Process ID\s*:\s*(\d+)")                            { $par=$Matches[1].Trim() }
+                    # WER P fields fallback
+                    if (-not $pf -and $m2 -match "(?m)^\s*P1\s*:\s*([^\r\n]+)")  { $cand=$Matches[1].Trim(); if($cand -match "\\|\.exe|\.dll|\.sys"){$pc=$cand}else{$pf=$cand} }
+                    if (-not $pc -and $m2 -match "(?m)^\s*P3\s*:\s*([^\r\n]+)")  { $cand=$Matches[1].Trim(); if($cand -match "\\|\.exe|\.dll|\.sys"){$pc=$cand} }
+                    if (-not $pc -and $m2 -match "(?m)^\s*P2\s*:\s*([^\r\n]+)")  { $cand=$Matches[1].Trim(); if($cand -match "\\|\.exe|\.dll|\.sys"){$pc=$cand} }
+                    if (-not $pc -and $m2 -match "(?mi)([A-Za-z]:\\[^\r\n]+\.(?:exe|dll|sys|com))") { $pc=$Matches[1].Trim() }
+                    # Code erreur
+                    if ($m2 -match "Code d.exception\s*:\s*(0x[0-9a-fA-F]+)")          { $ce=$Matches[1] }
+                    elseif ($m2 -match "Exception code:\s*(0x[0-9a-fA-F]+)")           { $ce=$Matches[1] }
+                    elseif ($m2 -match "(0x[0-9a-fA-F]{8})")                            { $ce=$Matches[1] }
+                    # EventName WER
+                    if ($m2 -match "(?mi)Nom d.év[eé]nement\s*:\s*([^\r\n]+)")         { $ev=$Matches[1].Trim() }
+                    elseif ($m2 -match "(?mi)Event Name\s*:\s*([^\r\n]+)")              { $ev=$Matches[1].Trim() }
+                    if ($_.ProviderName -match "Winlogon|WerFault|Error Reporting")    { $dbg=$m2 }
+                    # WER version + SourceEnrichie
+                    $wv=""
+                    if ($m2 -match "(?m)^\s*P2\s*:\s*([^\r\n]+)") { $wv=$Matches[1].Trim() }
+                    $src = if ($pf -and $pf -notmatch "userinit|explorer") {
+                        $v2 = if ($wv) { " v$wv" } else { "" }
+                        "$pf$v2 ($($_.ProviderName))"
+                    } else { $_.ProviderName }
+                    # ProcsVoisins : cross-ref Application +-2min
+                    $pv = @()
+                    try {
+                        $tDv=$_.TimeCreated.AddMinutes(-2); $tFv=$_.TimeCreated.AddMinutes(2)
+                        Get-WinEvent -FilterHashtable @{ LogName='Application'; StartTime=$tDv } -EA SilentlyContinue |
+                            Where-Object { $_.TimeCreated -le $tFv -and $_.Id -in @(1000,1002,1026) } |
+                            ForEach-Object {
+                                $vn=""
+                                if ($_.Message -match "Nom de l.application d[eé]faillante\s*:\s*([^\s,]+)") { $vn=$Matches[1] }
+                                elseif ($_.Message -match "Faulting application name:\s*([^\s,]+)")           { $vn=$Matches[1] }
+                                if ($vn -and $vn -ne $pf) { $pv += $vn }
+                            }
+                    } catch {}
                     $r += [PSCustomObject]@{
                         Date=$_.TimeCreated; Type=$type; Source=$_.ProviderName; ID=$_.Id
                         Message=($_.Message -split "`n")[0].Trim()
                         ProcFautif=$pf; ProcModule=$pm; ProcChemin=$pc; ProcPid=$pp; ProcParent=$par
-                        Evenement=$ev; CodeErreur=$ce; ProcsVoisins=""; SourceEnrichie=$src; MsgComplet=$dbg }
+                        Evenement=$ev; CodeErreur=$ce
+                        ProcsVoisins=(($pv | Select-Object -Unique) -join ", ")
+                        SourceEnrichie=$src; MsgComplet=$dbg }
                 }
         } catch {}
         return $r | Sort-Object Date -Descending
@@ -7970,8 +8055,10 @@ function Invoke-CrashDiag {
                     $nb    = $g.Count
                     $msg   = ($first.Message -split "`n")[0].Trim()
                     if ($msg.Length -gt 80) { $msg = $msg.Substring(0,77)+"..." }
-                    if ($nb -eq 1) { $lignes += "  [$($first.TimeCreated.ToString('HH:mm:ss'))]  $($first.ProviderName) (ID $($first.Id))"; $lignes += "    $msg" }
-                    else           { $lignes += "  [$($first.TimeCreated.ToString('HH:mm:ss')) -> $($last.TimeCreated.ToString('HH:mm:ss'))]  $($first.ProviderName) (ID $($first.Id))  x$nb"; $lignes += "    $msg" }
+                    $extra=""
+                    if ($first.Id -eq 153 -and $first.Message -match "disque\s+(\d+).*\\Device\\(\w+)") { $extra="  Disque $($Matches[1]) (\Device\$($Matches[2]))" }
+                    if ($nb -eq 1) { $lignes += "  [$($first.TimeCreated.ToString('HH:mm:ss'))]  $($first.ProviderName) (ID $($first.Id))$extra"; $lignes += "    $msg" }
+                    else           { $lignes += "  [$($first.TimeCreated.ToString('HH:mm:ss')) -> $($last.TimeCreated.ToString('HH:mm:ss'))]  $($first.ProviderName) (ID $($first.Id))  x$nb$extra"; $lignes += "    $msg" }
                 }
                 $r += [PSCustomObject]@{ CrashDate=$crash.Date; FenetreDebut=$tDebut; FenetreFin=$tFin; NbEvts=$evts.Count; Lignes=$lignes; Groupes=$groupes }
             } catch {}
@@ -8085,6 +8172,7 @@ function Invoke-CrashDiag {
         if ($InfoSys["XMP_Detecte"]) { $c += "  /!\ XMP/EXPO : $($InfoSys['XMP_Detail'])" }
         if ($InfoSys["RAM_Alerte"])   { $c += "  /!\ ALERTE RAM : memoire quasi saturee !" }
         if ($InfoSys["Disque_Alerte"]){ $c += "  /!\ ALERTE DISQUE : C: presque plein !" }
+        if ($InfoSys["CPU_Alerte"])   { $c += "  /!\ ALERTE CPU : charge > 95% !" }
         $c += ""
 
         # DUMPS
@@ -8164,6 +8252,10 @@ function Invoke-CrashDiag {
                 $c += "  DATE   : $($f.Date.ToString('dd/MM/yyyy HH:mm:ss'))"
                 $c += "  TYPE   : $($f.Type)"; $c += "  DETAIL : $($f.Detail)"; $c += ""
             }
+            $c += "  LEGENDE :"
+            $c += "  TDR-SCREEN-FREEZE     = GPU gele, Windows a relance le pilote (ecran noir bref)"
+            $c += "  LIVEKERNELREPORT      = fichier .dmp cree pendant le freeze (analysable)"
+            $c += "  GAP-LOG-SUSPECT       = trou dans les journaux = systeme peut-etre gele"
         }
 
         # SESSIONS
@@ -8174,13 +8266,20 @@ function Invoke-CrashDiag {
             if ($decoSusp.Count -gt 0) {
                 $c += "  DECONNEXIONS NON PLANIFIEES :"
                 foreach ($s in $decoSusp|Select-Object -First 20) {
-                    $c += "  $($s.Date.ToString('dd/MM/yyyy HH:mm:ss'))  [$($s.Type)]$(if($s.User){" | $($s.User)"})"
+                    $u2 = if ($s.User)        { " | $($s.User)" }        else { "" }
+                    $ts = if ($s.TypeSession) { " | $($s.TypeSession)" } else { "" }
+                    $ip = if ($s.IPSource)    { " | $($s.IPSource)" }    else { "" }
+                    $c += "  $($s.Date.ToString('dd/MM/yyyy HH:mm:ss'))  [$($s.Type)]$u2$ts$ip"
                 }
                 $c += ""
             }
             $c += "  HISTORIQUE COMPLET :"
             foreach ($s in $Sessions|Select-Object -First 30) {
-                $c += "  $($s.Date.ToString('dd/MM/yyyy HH:mm:ss'))  [$($s.Type)]$(if($s.User){" | $($s.User)"})"
+                $u2  = if ($s.User)        { " | $($s.User)" }              else { "" }
+                $ts  = if ($s.TypeSession) { " | $($s.TypeSession)" }       else { "" }
+                $ip  = if ($s.IPSource)    { " | IP: $($s.IPSource)" }      else { "" }
+                $sid = if ($s.SessionID)   { " | Session $($s.SessionID)" } else { "" }
+                $c += "  $($s.Date.ToString('dd/MM/yyyy HH:mm:ss'))  [$($s.Type)]$u2$ts$sid$ip"
             }
         }
         $c += ""
@@ -8192,10 +8291,40 @@ function Invoke-CrashDiag {
         else {
             foreach ($e in $crashes) {
                 $c += "  $($e.Date.ToString('dd/MM/yyyy HH:mm:ss'))  [$($e.Type)]"
-                if ($e.ProcFautif)  { $c += "  COUPABLE : $($e.ProcFautif)" }
-                if ($e.ProcModule)  { $c += "  MODULE   : $($e.ProcModule)" }
-                if ($e.CodeErreur) { $c += "  CODE ERR : $($e.CodeErreur)  $(_ExLabel $e.CodeErreur)" }
-                $c += "  MSG      : $($e.Message)"; $c += ""
+                if ($e.ProcFautif)  { $c += "  COUPABLE  : $($e.ProcFautif)" }
+                if ($e.ProcModule)  { $c += "  MODULE    : $($e.ProcModule)" }
+                if ($e.ProcChemin)  { $c += "  CHEMIN    : $($e.ProcChemin)" }
+                if ($e.ProcPid)     { $c += "  PID       : $($e.ProcPid)" }
+                if ($e.ProcParent)  { $c += "  PARENT    : $($e.ProcParent)" }
+                if ($e.Evenement)   {
+                    $desc = switch -Regex ($e.Evenement) {
+                        "RADAR_PRE_LEAK" { " (fuite memoire detectee)" }
+                        "APPCRASH"       { " (crash application)" }
+                        "CLR20r3"        { " (crash .NET)" }
+                        "BEX64"          { " (buffer overflow 64-bit)" }
+                        "STACK_OVERFLOW" { " (depassement pile)" }
+                        "OUT_OF_MEMORY"  { " (memoire insuffisante)" }
+                        default          { "" }
+                    }
+                    $c += "  EVENEMENT : $($e.Evenement)$desc"
+                }
+                if ($e.SourceEnrichie) { $c += "  SOURCE    : $($e.SourceEnrichie)" }
+                elseif ($e.Source)     { $c += "  SOURCE    : $($e.Source)" }
+                if ($e.CodeErreur)  { $c += "  CODE ERR  : $($e.CodeErreur)  $(_ExLabel $e.CodeErreur)" }
+                if ($e.ProcsVoisins){ $c += "  PROC +-2min: $($e.ProcsVoisins)" }
+                $c += "  MSG       : $($e.Message)"
+                if ($e.MsgComplet) {
+                    $c += "  --- MESSAGE COMPLET (debug) ---"
+                    $skipFJ = $false
+                    $e.MsgComplet -split "`n" | Where-Object { $_.Trim() -ne "" } | ForEach-Object {
+                        $lg = $_
+                        if ($lg -match "Fichiers joints|Attached files") { $skipFJ = $true }
+                        if ($lg -match "Ces fichiers sont|These files may be|Symbole d.analyse|Analysis symbol") { $skipFJ = $false }
+                        if (-not $skipFJ -and $lg -notmatch "WER\\Temp|^\s*\|\s*NULL\s*$") { $c += "  | $lg" }
+                    }
+                    $c += "  --- FIN MESSAGE COMPLET ---"
+                }
+                $c += ""
             }
         }
 
@@ -8224,6 +8353,14 @@ function Invoke-CrashDiag {
             $r2 += "  [XMP/EXPO] -> $($InfoSys['XMP_Detail'])"
             $r2 += "  -> Desactivez XMP dans le BIOS pour tester"; $r2 += ""
         }
+        if ($nbDe -gt 0) {
+            $r2 += "  [DECONNEXIONS NON PLANIFIEES]"
+            $r2 += "  -> Comparez les heures avec les arrets brutaux : meme minute = meme cause"
+            $r2 += "  -> Si seul l ecran s eteint : possible TDR GPU (voir section Watchdog)"
+            $r2 += ""
+        }
+        if ($InfoSys["RAM_Alerte"])    { $r2 += "  [RAM SATUREE]  -> Fermez des onglets/applis ou ajoutez de la RAM" }
+        if ($InfoSys["Disque_Alerte"]) { $r2 += "  [DISQUE PLEIN] -> Liberez de l espace sur C: (nettoyage disque)" }
         if ($r2.Count -eq 0) {
             $r2 += "  Aucune anomalie grave dans la periode analysee."
             $r2 += "  Si les plantages continuent : -HeuresHistorique $($HeuresHistorique*2)"
@@ -8293,10 +8430,26 @@ function Invoke-CrashDiag {
             foreach ($e in $crashRows) {
                 $bt=if($e.Type -match "CRASH"){"badge-crit"}else{"badge-warn"}
                 $secCrash+="<div class='event-card'><div class='event-header'><span class='badge $bt'>$($e.Type)</span> <span class='event-date'>$($e.Date.ToString('dd/MM/yyyy HH:mm:ss'))</span></div>"
-                if($e.ProcFautif){$secCrash+="<div><span class='lbl'>COUPABLE</span> <strong>$($e.ProcFautif)</strong></div>"}
-                if($e.ProcModule){$secCrash+="<div><span class='lbl'>MODULE</span> <code>$($e.ProcModule)</code></div>"}
-                if($e.CodeErreur){$secCrash+="<div><span class='lbl'>CODE ERR</span> <code>$($e.CodeErreur)</code></div>"}
-                $secCrash+="<div><span class='lbl'>MSG</span> $([System.Web.HttpUtility]::HtmlEncode($e.Message))</div></div>"
+                if($e.ProcFautif)    {$secCrash+="<div><span class='lbl'>COUPABLE</span> <strong>$($e.ProcFautif)</strong></div>"}
+                if($e.ProcModule)    {$secCrash+="<div><span class='lbl'>MODULE</span> <code>$($e.ProcModule)</code></div>"}
+                if($e.ProcChemin)    {$secCrash+="<div><span class='lbl'>CHEMIN</span> <code>$([System.Web.HttpUtility]::HtmlEncode($e.ProcChemin))</code></div>"}
+                if($e.ProcPid)       {$secCrash+="<div><span class='lbl'>PID</span> $($e.ProcPid)</div>"}
+                if($e.ProcParent)    {$secCrash+="<div><span class='lbl'>PARENT</span> $($e.ProcParent)</div>"}
+                if($e.Evenement)     {$secCrash+="<div><span class='lbl'>EVENEMENT</span> $([System.Web.HttpUtility]::HtmlEncode($e.Evenement))</div>"}
+                if($e.SourceEnrichie){$secCrash+="<div><span class='lbl'>SOURCE</span> $([System.Web.HttpUtility]::HtmlEncode($e.SourceEnrichie))</div>"}
+                elseif($e.Source)    {$secCrash+="<div><span class='lbl'>SOURCE</span> $([System.Web.HttpUtility]::HtmlEncode($e.Source))</div>"}
+                if($e.CodeErreur)    {$secCrash+="<div><span class='lbl'>CODE ERR</span> <code>$($e.CodeErreur)</code></div>"}
+                $secCrash+="<div><span class='lbl'>MSG</span> $([System.Web.HttpUtility]::HtmlEncode($e.Message))</div>"
+                if($e.MsgComplet) {
+                    $dbgH=""; $skipFJ=$false
+                    $e.MsgComplet -split "`n" | Where-Object{$_.Trim() -ne ""} | ForEach-Object {
+                        if($_ -match "Fichiers joints|Attached files"){$skipFJ=$true}
+                        if($_ -match "Ces fichiers sont|Symbole d.analyse|Analysis symbol"){$skipFJ=$false}
+                        if(-not $skipFJ -and $_ -notmatch "WER\\Temp|^\s*NULL\s*$"){$dbgH+=[System.Web.HttpUtility]::HtmlEncode($_)+"`n"}
+                    }
+                    $secCrash+="<details><summary>Message complet (debug)</summary><pre>$dbgH</pre></details>"
+                }
+                $secCrash+="</div>"
             }
         }
         # Sessions
@@ -8304,11 +8457,14 @@ function Invoke-CrashDiag {
         else {
             $rows=@()
             foreach ($s in $Sessions|Select-Object -First 50) {
-                $u=if($s.User){$s.User}else{"-"}
+                $u  =if($s.User)       {$s.User}       else{"-"}
+                $ts2=if($s.TypeSession){$s.TypeSession}else{"-"}
+                $ip =if($s.IPSource)   {$s.IPSource}   else{"-"}
+                $sid=if($s.SessionID)  {$s.SessionID}  else{"-"}
                 $cls=if($s.Type -match "ARRET-NON-PLANIFIE|DECONNEXION$"){" class='row-warn'"}else{""}
-                $rows+="<tr$cls><td>$($s.Date.ToString('dd/MM/yyyy HH:mm:ss'))</td><td>$($s.Type)</td><td>$u</td></tr>"
+                $rows+="<tr$cls><td>$($s.Date.ToString('dd/MM/yyyy HH:mm:ss'))</td><td>$($s.Type)</td><td>$u</td><td>$ts2</td><td>$sid</td><td>$ip</td></tr>"
             }
-            $secSess="<table><thead><tr><th>Date</th><th>Type</th><th>User</th></tr></thead><tbody>"+($rows -join "")+"</tbody></table>"
+            $secSess="<table><thead><tr><th>Date</th><th>Type</th><th>User</th><th>Session Type</th><th>Session ID</th><th>IP Source</th></tr></thead><tbody>"+($rows -join "")+"</tbody></table>"
         }
         # Freezes
         if ($Freezes.Count -eq 0) { $secFrz="<p class='ok-msg'>&#10003; Aucun freeze detecte.</p>" }
@@ -8361,8 +8517,10 @@ function Invoke-CrashDiag {
         if ($nbW -gt 0 -or $nbG -gt 0) { $ri+="<div class='reco-item reco-warn'><strong>WATCHDOG / TDR / GPU</strong><ul><li>Mise a jour pilotes GPU</li><li>DDU si recent</li><li>Temp GPU MSI Afterburner (&gt;85C)</li></ul></div>" }
         if ($nbWH -gt 0) { $ri+="<div class='reco-item reco-crit'><strong>WHEA</strong><ul><li>RAM : MemTest86</li><li>CPU OC : desactiver</li></ul></div>" }
         if ($InfoSys["XMP_Detecte"]) { $ri+="<div class='reco-item reco-warn'><strong>XMP/EXPO</strong><ul><li>$($InfoSys['XMP_Detail'])</li><li>Desactiver XMP dans BIOS pour tester</li></ul></div>" }
+        if ($nbDe -gt 0) { $ri+="<div class='reco-item reco-warn'><strong>DECONNEXIONS NON PLANIFIEES</strong><ul><li>Comparez les heures avec les arrets brutaux : meme minute = meme cause</li><li>Si seul l ecran s eteint : possible TDR GPU (voir section Watchdog)</li></ul></div>" }
         if ($ri.Count -eq 0) { $ri+="<div class='reco-item reco-ok'><strong>&#10003; Aucune anomalie grave</strong><p>Augmentez la fenetre si besoin : <code>-HeuresHistorique $($HeuresHistorique*2)</code></p></div>" }
         $secReco=$ri -join ""
+        $txtContent=(Get-Content $FichierLog -Raw -ErrorAction SilentlyContinue | ConvertTo-Json -Compress)
 
         $html=@"
 <!DOCTYPE html><html lang="fr"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -8416,6 +8574,7 @@ pre{background:var(--surface2);border:1px solid var(--border);border-radius:6px;
     <h1>&#9673; $($InfoSys['Hostname']) &mdash; $($now.ToString('dd/MM/yyyy HH:mm:ss'))</h1>
     <span class="gp $(if($gL -eq 'OK'){'ok'}elseif($gL -eq 'ATTENTION'){'attention'}elseif($gL -eq 'SERIEUX'){'warn'}else{''})">$gL</span>
     <div class="btn-group">
+      <button class="btn" onclick="exportTxt()">&#8681; TXT</button>
       <button class="btn" onclick="toggleTheme()">&#9790; Theme</button>
       <button class="btn" onclick="window.print()">&#128438; Imprimer</button>
     </div>
@@ -8433,8 +8592,10 @@ pre{background:var(--surface2);border:1px solid var(--border);border-radius:6px;
   </div>
 </div>
 <script>
+const txtData=$txtContent;
 function show(id){document.querySelectorAll('.section').forEach(s=>s.classList.remove('active'));document.querySelectorAll('#sidebar nav a').forEach(a=>a.classList.remove('active'));document.getElementById('sec-'+id).classList.add('active');document.getElementById('nav-'+id).classList.add('active');return false}
 function toggleTheme(){const b=document.body;b.dataset.theme=b.dataset.theme==='dark'?'light':'dark'}
+function exportTxt(){const blob=new Blob([txtData.replace(/\\n/g,'\n')],{type:'text/plain;charset=utf-8'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='CrashDiag_$ts.txt';a.click()}
 document.querySelectorAll('#sidebar nav a').forEach(a=>a.addEventListener('click',e=>e.preventDefault()))
 </script>
 </body></html>
@@ -8445,47 +8606,92 @@ document.querySelectorAll('#sidebar nav a').forEach(a=>a.addEventListener('click
 
     # ── ORCHESTRATION ─────────────────────────────────────────────────────────
     Write-Title "10. CRASHDIAG — Crashes / BSOD / Sessions / Freezes / WHEA"
-    $depuis = (Get-Date).AddHours(-$HeuresHistorique)
-    Write-INFO "Periode : $HeuresHistorique dernieres heures (depuis $($depuis.ToString('dd/MM/yyyy HH:mm')))"
     Write-INFO "Dossier sortie : $outDir"
-    Write-INFO ""
+    if ($Watch) { Write-INFO "MODE SURVEILLANCE CONTINUE (toutes les ${IntervalSec}s) — Ctrl+C pour arreter" }
 
-    Write-INFO "Lecture evenements systeme..."
-    $evtSys  = _GetEvenementsSysteme -Depuis $depuis
-    Write-INFO "Lecture sessions utilisateur..."
-    $sess    = _GetSessions          -Depuis $depuis
-    Write-INFO "Recherche fichiers .dmp..."
-    $dumps   = _GetDumps             -Depuis $depuis
-    Write-INFO "Detection screen freeze / gaps..."
-    $freezes = _GetFreezes           -Depuis $depuis
-    Write-INFO "Analyse Watchdog / TDR / App crash..."
-    $wdog    = _GetWatchdog          -Depuis $depuis
-    Write-INFO "Contexte pre-crash..."
-    $preCrash= _GetPreCrash          -EvtSys $evtSys
-    Write-INFO "Etat systeme..."
-    $infoSys = _GetInfoSys
+    function _Analyse {
+        $depuis = (Get-Date).AddHours(-$HeuresHistorique)
+        Write-INFO "Periode : $HeuresHistorique dernieres heures (depuis $($depuis.ToString('dd/MM/yyyy HH:mm')))"
+        Write-INFO ""
 
-    Write-INFO "Generation rapport TXT..."
-    $null = _WriteRapport -EvtSys $evtSys -Sessions $sess -Dumps $dumps -Watchdog $wdog -Freezes $freezes -InfoSys $infoSys -Depuis $depuis -PreCrash $preCrash
-    Write-OK  "Rapport TXT : $FichierLog"
+        Write-INFO "Lecture evenements systeme..."
+        $evtSys  = _GetEvenementsSysteme -Depuis $depuis
+        Write-INFO "Lecture sessions utilisateur..."
+        $sess    = _GetSessions          -Depuis $depuis
+        Write-INFO "Recherche fichiers .dmp..."
+        $dumps   = _GetDumps             -Depuis $depuis
+        Write-INFO "Detection screen freeze / gaps..."
+        $freezes = _GetFreezes           -Depuis $depuis
+        Write-INFO "Analyse Watchdog / TDR / App crash..."
+        $wdog    = _GetWatchdog          -Depuis $depuis
+        Write-INFO "Contexte pre-crash..."
+        $preCrash= _GetPreCrash          -EvtSys $evtSys
+        Write-INFO "Etat systeme..."
+        $infoSys = _GetInfoSys
 
-    Write-INFO "Generation rapport HTML..."
-    $htmlPath = _WriteHTML -EvtSys $evtSys -Sessions $sess -Dumps $dumps -Watchdog $wdog -Freezes $freezes -InfoSys $infoSys -Depuis $depuis -PreCrash $preCrash
-    Write-OK  "Rapport HTML : $htmlPath"
+        Write-INFO "Generation rapport TXT..."
+        $null = _WriteRapport -EvtSys $evtSys -Sessions $sess -Dumps $dumps -Watchdog $wdog -Freezes $freezes -InfoSys $infoSys -Depuis $depuis -PreCrash $preCrash
+        Write-OK  "Rapport TXT : $FichierLog"
 
-    if ($ExportCSV) {
-        $csvPath = Join-Path $outDir "CrashDiag_$ts.csv"
-        $rows = @()
-        foreach ($e in $evtSys)  { $rows += [PSCustomObject]@{Date=$e.Date.ToString('dd/MM/yyyy HH:mm:ss');Cat="SYSTEME";Type=$e.Flag;Source=$e.Source;Coupable="";Message=$e.Message} }
-        foreach ($e in ($wdog|Where-Object{$_.Type -match "HANG|CRASH"})) { $rows += [PSCustomObject]@{Date=$e.Date.ToString('dd/MM/yyyy HH:mm:ss');Cat="APP-CRASH";Type=$e.Type;Source=$e.Source;Coupable=$e.ProcFautif;Message=$e.Message} }
-        foreach ($s in $sess)    { $rows += [PSCustomObject]@{Date=$s.Date.ToString('dd/MM/yyyy HH:mm:ss');Cat="SESSION";Type=$s.Type;Source=$s.TypeSession;Coupable=$s.User;Message=$s.Message} }
-        $rows | Export-Csv -Path $csvPath -Encoding UTF8 -NoTypeInformation -Force
-        Write-OK "Rapport CSV  : $csvPath"
+        if ($ShareDpaste) {
+            Write-INFO "Envoi vers dpaste..."
+            try {
+                $rapportContenu = [System.IO.File]::ReadAllText($FichierLog, [System.Text.Encoding]::UTF8)
+                $encodedContent = [System.Uri]::EscapeDataString($rapportContenu)
+                $bodyString = "content=$encodedContent&expiry_days=7&syntax=text"
+                $response = Invoke-RestMethod -Uri "https://dpaste.com/api/v2/" -Method Post -Body $bodyString -ContentType "application/x-www-form-urlencoded"
+                $urlD = $response.Trim()
+                if ($urlD -match "https://dpaste\.com/") {
+                    Write-OK "DPASTE : $urlD"
+                    "$(Get-Date) : DPASTE -> $urlD" | Out-File (Join-Path $outDir "liens_upload.txt") -Append
+                } else { Write-WARN "DPaste : reponse inattendue : $urlD" }
+            } catch { Write-WARN "DPaste ERREUR : $_" }
+        }
+        if ($ShareGofile) {
+            Write-INFO "Envoi vers Gofile..."
+            try {
+                $uploadJson = curl.exe -s -F "file=@$FichierLog" "https://store1.gofile.io/contents/uploadfile" | ConvertFrom-Json
+                if ($uploadJson.status -eq "ok") {
+                    $dl = $uploadJson.data.downloadPage
+                    Write-OK "GOFILE : $dl"
+                    "$(Get-Date) : GOFILE -> $dl" | Out-File (Join-Path $outDir "liens_upload.txt") -Append
+                } else { Write-WARN "Gofile ERREUR : $($uploadJson.status)" }
+            } catch { Write-WARN "Gofile ERREUR : $_" }
+        }
+
+        if ($HTML) {
+            Write-INFO "Generation rapport HTML..."
+            $htmlPath = _WriteHTML -EvtSys $evtSys -Sessions $sess -Dumps $dumps -Watchdog $wdog -Freezes $freezes -InfoSys $infoSys -Depuis $depuis -PreCrash $preCrash
+            Write-OK  "Rapport HTML : $htmlPath"
+        }
+
+        if ($ExportCSV) {
+            $csvPath = Join-Path $outDir "CrashDiag_$ts.csv"
+            $rows = @()
+            foreach ($e in $evtSys)  { $rows += [PSCustomObject]@{Date=$e.Date.ToString('dd/MM/yyyy HH:mm:ss');Cat="SYSTEME";Type=$e.Flag;Source=$e.Source;Coupable="";Message=$e.Message} }
+            foreach ($e in ($wdog|Where-Object{$_.Type -match "HANG|CRASH"})) { $rows += [PSCustomObject]@{Date=$e.Date.ToString('dd/MM/yyyy HH:mm:ss');Cat="APP-CRASH";Type=$e.Type;Source=$e.Source;Coupable=$e.ProcFautif;Message=$e.Message} }
+            foreach ($s in $sess)    { $rows += [PSCustomObject]@{Date=$s.Date.ToString('dd/MM/yyyy HH:mm:ss');Cat="SESSION";Type=$s.Type;Source=$s.TypeSession;Coupable=$s.User;Message=$s.Message} }
+            $rows | Export-Csv -Path $csvPath -Encoding UTF8 -NoTypeInformation -Force
+            Write-OK "Rapport CSV  : $csvPath"
+        }
+
+        Write-INFO ""
+        Write-OK  "Dossier complet : $outDir"
+        if ($HTML) { Write-INFO "Ouvrez le HTML dans votre navigateur pour le rapport interactif." }
     }
 
-    Write-INFO ""
-    Write-OK  "Dossier complet : $outDir"
-    Write-INFO "Ouvrez le HTML dans votre navigateur pour le rapport interactif."
+    if ($Watch) {
+        $iter = 0
+        while ($true) {
+            $iter++
+            Write-INFO "=== Analyse #$iter  $(Get-Date -Format 'HH:mm:ss') ==="
+            _Analyse
+            Write-OK "Prochain scan dans ${IntervalSec}s (Ctrl+C pour arreter)"
+            Start-Sleep -Seconds $IntervalSec
+        }
+    } else {
+        _Analyse
+    }
 }
 
 # ===========================================================================
@@ -9215,11 +9421,17 @@ function Show-MainMenu {
                 Write-Host "  ║                    -ReportFiles pc1.txt,pc2.txt              ║" -ForegroundColor DarkGray
                 Write-Host "  ╠══════════════════════════════════════════════════════════════╣" -ForegroundColor DarkYellow
                 Write-Host "  ║  MODULE CrashDiag                                            ║" -ForegroundColor Cyan
-                Write-Host "  ║    -HeuresHistorique <n>  Fenetre d'analyse (defaut : 48h)   ║" -ForegroundColor White
+                Write-Host "  ║    -HeuresHistorique <n>  Fenetre d'analyse (defaut : 72h)   ║" -ForegroundColor White
                 Write-Host "  ║                          Ex: .\WT.ps1 -Module CrashDiag \    ║" -ForegroundColor DarkGray
                 Write-Host "  ║                              -HeuresHistorique 96            ║" -ForegroundColor DarkGray
                 Write-Host "  ║    -ExportCSV             Generer aussi un fichier CSV       ║" -ForegroundColor White
                 Write-Host "  ║    -ExportHTML            Forcer la sortie HTML              ║" -ForegroundColor White
+                Write-Host "  ║    -Watch                 Mode surveillance continue         ║" -ForegroundColor White
+                Write-Host "  ║    -IntervalSec <n>       Intervalle Watch en secondes (60)  ║" -ForegroundColor White
+                Write-Host "  ║    -ShareDpaste           Envoyer rapport TXT vers dpaste    ║" -ForegroundColor White
+                Write-Host "  ║    -ShareGofile           Envoyer rapport TXT vers Gofile    ║" -ForegroundColor White
+                Write-Host "  ║                          Ex: .\WT.ps1 -Module CrashDiag \    ║" -ForegroundColor DarkGray
+                Write-Host "  ║                   -Watch -IntervalSec 120 -ShareDpaste       ║" -ForegroundColor DarkGray
                 Write-Host "  ╚══════════════════════════════════════════════════════════════╝" -ForegroundColor DarkYellow
                 Write-Host ""
                 Write-Host "  [!] Tous les modules requierent les droits Administrateur." -ForegroundColor DarkYellow
@@ -9233,19 +9445,30 @@ function Show-MainMenu {
                 Write-Host ""
                 Write-Host "  ┌─ MODULE CRASHDIAG ────────────────────────────────────────┐" -ForegroundColor Yellow
                 Write-Host "  │  Analyse BSOD, arrets brutaux, freezes, WHEA, app crash   │" -ForegroundColor Gray
-                Write-Host "  │  Periode par defaut : 48 dernieres heures                 │" -ForegroundColor Gray
-                Write-Host "  │                                                           │" -ForegroundColor Gray
+                Write-Host "  │  Periode par defaut : 72 dernieres heures                 │" -ForegroundColor Gray
                 Write-Host "  │  Sortie : Bureau\CrashDiag_<ts>\  (TXT + HTML interactif) │" -ForegroundColor Gray
                 Write-Host "  └───────────────────────────────────────────────────────────┘" -ForegroundColor Yellow
                 Write-Host ""
-                $cdHeures = Read-Host "  Heures d'historique [48]"
-                if ([string]::IsNullOrWhiteSpace($cdHeures) -or $cdHeures -notmatch '^\d+$') { $cdHeures = 48 }
-                $cdCSV = (Read-Host "  Exporter aussi en CSV ? [o/N]").ToUpper().Trim()
-                if ($cdCSV -eq "O") {
-                    Invoke-CrashDiag -HeuresHistorique ([int]$cdHeures) -HTML -ExportCSV
-                } else {
-                    Invoke-CrashDiag -HeuresHistorique ([int]$cdHeures) -HTML
+                $cdHeures = Read-Host "  Heures d'historique [72]"
+                if ([string]::IsNullOrWhiteSpace($cdHeures) -or $cdHeures -notmatch '^\d+$') { $cdHeures = 72 }
+                $cdCSV    = (Read-Host "  Exporter aussi en CSV ? [o/N]").ToUpper().Trim()
+                $cdWatch  = (Read-Host "  Mode surveillance continue ? [o/N]").ToUpper().Trim()
+                $cdInterv = 60
+                if ($cdWatch -eq "O") {
+                    $cdIntervStr = Read-Host "  Intervalle entre analyses en secondes [60]"
+                    if ($cdIntervStr -match '^\d+$' -and [int]$cdIntervStr -gt 0) { $cdInterv = [int]$cdIntervStr }
                 }
+                $cdDpaste = (Read-Host "  Envoyer rapport vers dpaste.com ? [o/N]").ToUpper().Trim()
+                $cdGofile = (Read-Host "  Envoyer rapport vers Gofile.io ? [o/N]").ToUpper().Trim()
+                $cdParams = @{
+                    HeuresHistorique = [int]$cdHeures
+                    HTML             = $true
+                }
+                if ($cdCSV    -eq "O") { $cdParams["ExportCSV"]    = $true }
+                if ($cdWatch  -eq "O") { $cdParams["Watch"] = $true; $cdParams["IntervalSec"] = $cdInterv }
+                if ($cdDpaste -eq "O") { $cdParams["ShareDpaste"]  = $true }
+                if ($cdGofile -eq "O") { $cdParams["ShareGofile"]  = $true }
+                Invoke-CrashDiag @cdParams
             }
 
             "11" { Invoke-GhostWin }
@@ -9280,7 +9503,7 @@ switch ($Module) {
     "NetShare"  { Invoke-NetShare -NSDMode $NetMode }
     "ComparePC" { Invoke-ComparePC -InputFiles $ReportFiles }
     "EVCDiag"   { Invoke-EVCDiag }
-    "CrashDiag" { Invoke-CrashDiag -HeuresHistorique $HeuresHistorique -HTML:$ExportHTML -ExportCSV:$ExportCSV }
+    "CrashDiag" { Invoke-CrashDiag -HeuresHistorique $HeuresHistorique -HTML:$ExportHTML -ExportCSV:$ExportCSV -Watch:$Watch -IntervalSec $IntervalSec -ShareDpaste:$ShareDpaste -ShareGofile:$ShareGofile }
     "GhostWin"  { Invoke-GhostWin }
     default     { Show-MainMenu }
 }
