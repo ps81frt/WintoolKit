@@ -7,11 +7,20 @@ $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIden
 if (-not $isAdmin) {
     Write-Host ""
     Write-Host "  Ce script necessite les droits Administrateur." -ForegroundColor Yellow
+    if (-not $PSCommandPath) {
+        Write-Host "  ERREUR : Lancez ce script depuis un fichier .ps1, pas via iex/irm." -ForegroundColor Red
+        Read-Host "  Appuyez sur Entree pour quitter"
+        exit
+    }
     Write-Host "  Relancement en mode Administrateur..." -ForegroundColor Yellow
-    $args2 = "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`""
-    Start-Process pwsh -ArgumentList $args2 -Verb RunAs -ErrorAction SilentlyContinue
-    if (-not $?) {
-        Start-Process powershell -ArgumentList $args2 -Verb RunAs
+    $argList = "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`""
+    $launched = $false
+    try   { Start-Process pwsh       -ArgumentList $argList -Verb RunAs -ErrorAction Stop; $launched = $true } catch {}
+    if (-not $launched) {
+    try   { Start-Process powershell -ArgumentList $argList -Verb RunAs -ErrorAction Stop; $launched = $true } catch {} }
+    if (-not $launched) {
+        Write-Host "  Impossible de relancer en Administrateur." -ForegroundColor Red
+        Read-Host "  Appuyez sur Entree pour quitter"
     }
     exit
 }
@@ -42,7 +51,7 @@ do {
 
 if ($confirm -notmatch "^[OoYy]$") {
     Write-Host ""
-    Write-Host "  Annulé." -ForegroundColor Yellow
+    Write-Host "  Annule." -ForegroundColor Yellow
     Write-Host ""
     Read-Host "  Appuyez sur Entree pour quitter"
     exit
@@ -50,25 +59,40 @@ if ($confirm -notmatch "^[OoYy]$") {
 Write-Host ""
 
 try {
-    $wtkPath = "C:\Program Files\Wintoolkit"
+    $wtkPath   = "C:\Program Files\Wintoolkit"
     $wtkScript = "$wtkPath\Wintoolkit.ps1"
+
+    # 1. Creer le dossier
     New-Item -Path $wtkPath -ItemType Directory -Force | Out-Null
+
+    # 2. Exclure le dossier de Defender AVANT de telecharger
+    Add-MpPreference -ExclusionPath $wtkPath
+
+    # 3. Telecharger et debloquer
     Invoke-WebRequest https://raw.githubusercontent.com/ps81frt/WintoolKit/main/Wintoolkit.ps1 -OutFile $wtkScript -UseBasicParsing
     Unblock-File -Path $wtkScript
-    Add-MpPreference -ExclusionPath $wtkPath
-    if (!(Test-Path $PROFILE)) {
-        New-Item -Type File -Path $PROFILE -Force | Out-Null
+
+    # 4. Ajouter la fonction au profil PowerShell (les deux : pwsh + powershell.exe)
+    $func = "`nfunction Wintoolkit { & `"C:\Program Files\Wintoolkit\Wintoolkit.ps1`" }"
+    $targets = @(
+        "$env:ProgramFiles\PowerShell\7\profile.ps1",                                    # pwsh 7
+        "$env:SystemRoot\System32\WindowsPowerShell\v1.0\profile.ps1"                    # powershell.exe
+    )
+    foreach ($target in $targets) {
+        if (!(Test-Path $target)) {
+            New-Item -Type File -Path $target -Force | Out-Null
+        }
+        $content = Get-Content $target -Raw -ErrorAction SilentlyContinue
+        if ($content -notlike "*Wintoolkit*") {
+            Add-Content -Path $target -Value $func -Encoding UTF8
+        }
     }
-    $func = 'function Wintoolkit { & "C:\Program Files\Wintoolkit\Wintoolkit.ps1" }'
-    $profileContent = Get-Content $PROFILE -Raw -ErrorAction SilentlyContinue
-    if ($profileContent -notlike "*Wintoolkit*") {
-        Add-Content $PROFILE $func
-    }
-    # Installation des outils Linux (awk, smartctl, hdparm, lsblk, sg_inq etc...)
+
+    # 5. Installation des outils Linux (awk, smartctl, hdparm, lsblk, sg_inq etc...)
     Write-Host "  Installation des outils ..." -ForegroundColor Yellow
-    $zipUrl  = "https://github.com/ps81frt/LinuxToolsOnWindows/releases/download/1.0/LinuxToolOn-Windows.zip"
-    $tmpZip  = Join-Path $env:TEMP "LinuxToolOn-Windows.zip"
-    $tmpDir  = Join-Path $env:TEMP "LinuxTools_Install"
+    $zipUrl = "https://github.com/ps81frt/LinuxToolsOnWindows/releases/download/1.0/LinuxToolOn-Windows.zip"
+    $tmpZip = Join-Path $env:TEMP "LinuxToolOn-Windows.zip"
+    $tmpDir = Join-Path $env:TEMP "LinuxTools_Install"
     try {
         Invoke-WebRequest $zipUrl -OutFile $tmpZip -UseBasicParsing -ErrorAction Stop
         if (Test-Path $tmpDir) { Remove-Item $tmpDir -Recurse -Force }
@@ -78,8 +102,8 @@ try {
             $dest = Join-Path "$env:SystemRoot\System32" $bin.Name
             Copy-Item $bin.FullName -Destination $dest -Force -ErrorAction SilentlyContinue
         }
-        Remove-Item $tmpZip  -Force -ErrorAction SilentlyContinue
-        Remove-Item $tmpDir  -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-Item $tmpZip -Force -ErrorAction SilentlyContinue
+        Remove-Item $tmpDir -Recurse -Force -ErrorAction SilentlyContinue
         Write-Host "  Outils Linux installes." -ForegroundColor Green
     } catch {
         Write-Host "  Avertissement : outils Linux non installes : $_" -ForegroundColor Yellow
