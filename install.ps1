@@ -68,17 +68,24 @@ try {
     Unblock-File -Path $wtkScript
 
     $func = "`nfunction Wintoolkit { & `"C:\Program Files\Wintoolkit\Wintoolkit.ps1`" }"
+    
     $targets = @(
         "$env:ProgramFiles\PowerShell\7\profile.ps1",
         "$env:SystemRoot\System32\WindowsPowerShell\v1.0\profile.ps1"
     )
+    
     foreach ($target in $targets) {
+        $parent = Split-Path $target -Parent
+        if (!(Test-Path $parent)) {
+            New-Item -ItemType Directory -Path $parent -Force | Out-Null
+        }
         if (!(Test-Path $target)) {
-            New-Item -Type File -Path $target -Force | Out-Null
+            New-Item -ItemType File -Path $target -Force | Out-Null
         }
         $content = Get-Content $target -Raw -ErrorAction SilentlyContinue
         if ($content -notlike "*Wintoolkit*") {
-            Add-Content -Path $target -Value $func -Encoding UTF8
+            Add-Content -Path $target -Value $func -Encoding UTF8 -Force
+            Write-Host "  Ajout fonction dans : $target" -ForegroundColor Green
         }
     }
 
