@@ -59,6 +59,11 @@ try {
     $tmpDir = Join-Path $env:TEMP "LinuxTools_Install"
 
     New-Item -Path $wtkPath -ItemType Directory -Force | Out-Null
+    $currentPath = [Environment]::GetEnvironmentVariable("Path", "Machine")
+    if ($currentPath -notlike "*$wtkPath*") {
+        [Environment]::SetEnvironmentVariable("Path", "$currentPath;$wtkPath", "Machine")
+        Write-Host "  Ajout de $wtkPath au PATH système" -ForegroundColor Green
+    }
 
     Add-MpPreference -ExclusionPath $wtkPath -ErrorAction SilentlyContinue
     Add-MpPreference -ExclusionProcess "powershell.exe" -ErrorAction SilentlyContinue
